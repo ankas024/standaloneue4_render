@@ -65,6 +65,8 @@ private:
 	FString GetTexturePath(FMaterialParameterInfo Info) const;
 	void SetTexture(const FAssetData& AssetData, FMaterialParameterInfo Info);
 	FReply OnColorSwatchClicked(const FGeometry& Geometry, const FPointerEvent& MouseEvent, FMaterialParameterInfo Info);
+	void OnPickerColorCommitted(FLinearColor NewColor, TWeakObjectPtr<UMaterialInterface> Target, FMaterialParameterInfo Info);
+	void CloseColorPicker();
 	void CommitMaterialChange(UMaterialInterface* Material);
 
 	FText GetSelectedMaterialTitle() const;
@@ -80,4 +82,5 @@ private:
 	TSharedPtr<SScrollBox> ParameterBox;
 	TWeakObjectPtr<UMaterialInterface> ParametersFor;
 	bool bSyncingSelection = false;
+	bool bColorPickerOpen = false;
 };

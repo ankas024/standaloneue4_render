@@ -81,4 +81,5 @@ private:
 	TWeakPtr<FRenderStudioScene> SceneWeak;
 	FAdvancedPreviewScene* AdvancedPreviewScene;
 	bool bManipulating;
+	bool bMovedDuringDrag;
 };

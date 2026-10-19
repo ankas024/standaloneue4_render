@@ -33,6 +33,12 @@ namespace RenderStudioMaterialPanel
 	static const int32 ThumbnailSize = 44;
 	static const float LabelWidth = 110.0f;
 
+	/** Only the application's own materials are edited; engine materials are read only. */
+	static bool IsEditable(const UMaterialInterface* Material)
+	{
+		return Material && Material->GetPathName().StartsWith(TEXT("/Game/"));
+	}
+
 	static FString MakeDisplayName(const FMaterialParameterInfo& Info)
 	{
 		return FName::NameToDisplayString(Info.Name.ToString(), false);
@@ -41,6 +47,8 @@ namespace RenderStudioMaterialPanel
 
 SRenderStudioMaterialPanel::~SRenderStudioMaterialPanel()
 {
+	CloseColorPicker();
+
 	if (Scene.IsValid())
 	{
 		Scene->OnMaterialsChanged().RemoveAll(this);
@@ -339,6 +347,7 @@ TSharedPtr<SWidget> SRenderStudioMaterialPanel::OnContextMenuOpening()
 
 void SRenderStudioMaterialPanel::RebuildParameters()
 {
+	CloseColorPicker();
 	ParameterBox->ClearChildren();
 
 	UMaterialInterface* Material = Scene->GetSelectedMaterial();
@@ -442,7 +451,11 @@ void SRenderStudioMaterialPanel::RebuildParameters()
 			.FillWidth(1.0f)
 			.VAlign(VAlign_Center)
 			[
-				MakeParameterWidget(Parameter)
+				SNew(SBox)
+				.IsEnabled(RenderStudioMaterialPanel::IsEditable(Material))
+				[
+					MakeParameterWidget(Parameter)
+				]
 			]
 		];
 	}
@@ -512,6 +525,10 @@ float SRenderStudioMaterialPanel::GetScalar(FMaterialParameterInfo Info) const
 void SRenderStudioMaterialPanel::SetScalar(float Value, FMaterialParameterInfo Info, bool bCommit)
 {
 	UMaterialInterface* Material = ParametersFor.Get();
+	if (!RenderStudioMaterialPanel::IsEditable(Material))
+	{
+		return;
+	}
 	if (UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(Material))
 	{
 		// Instances update live while dragging
@@ -545,6 +562,10 @@ FLinearColor SRenderStudioMaterialPanel::GetVector(FMaterialParameterInfo Info) 
 void SRenderStudioMaterialPanel::SetVector(FLinearColor Value, FMaterialParameterInfo Info, bool bCommit)
 {
 	UMaterialInterface* Material = ParametersFor.Get();
+	if (!RenderStudioMaterialPanel::IsEditable(Material))
+	{
+		return;
+	}
 	if (UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(Material))
 	{
 		Instance->SetVectorParameterValueEditorOnly(Info, Value);
@@ -577,6 +598,10 @@ void SRenderStudioMaterialPanel::SetTexture(const FAssetData& AssetData, FMateri
 {
 	UTexture* Texture = Cast<UTexture>(AssetData.GetAsset());
 	UMaterialInterface* Material = ParametersFor.Get();
+	if (!RenderStudioMaterialPanel::IsEditable(Material))
+	{
+		return;
+	}
 	if (UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(Material))
 	{
 		Instance->SetTextureParameterValueEditorOnly(Info, Texture);
@@ -591,7 +616,7 @@ void SRenderStudioMaterialPanel::SetTexture(const FAssetData& AssetData, FMateri
 
 FReply SRenderStudioMaterialPanel::OnColorSwatchClicked(const FGeometry& Geometry, const FPointerEvent& MouseEvent, FMaterialParameterInfo Info)
 {
-	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
+	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton || !RenderStudioMaterialPanel::IsEditable(ParametersFor.Get()))
 	{
 		return FReply::Unhandled();
 	}
@@ -604,13 +629,30 @@ FReply SRenderStudioMaterialPanel::OnColorSwatchClicked(const FGeometry& Geometr
 	PickerArgs.bOnlyRefreshOnMouseUp = !bIsInstance;
 	PickerArgs.ParentWidget = AsShared();
 	PickerArgs.InitialColorOverride = GetVector(Info);
-	PickerArgs.OnColorCommitted = FOnLinearColorValueChanged::CreateLambda([this, Info](FLinearColor NewColor)
-	{
-		SetVector(NewColor, Info, true);
-	});
+	// The picker is a separate window: bind weakly and remember which material it edits
+	PickerArgs.OnColorCommitted = FOnLinearColorValueChanged::CreateSP(this, &SRenderStudioMaterialPanel::OnPickerColorCommitted, TWeakObjectPtr<UMaterialInterface>(ParametersFor), Info);
 	OpenColorPicker(PickerArgs);
+	bColorPickerOpen = true;
 
 	return FReply::Handled();
+}
+
+void SRenderStudioMaterialPanel::OnPickerColorCommitted(FLinearColor NewColor, TWeakObjectPtr<UMaterialInterface> Target, FMaterialParameterInfo Info)
+{
+	// Ignore a picker that was opened for another material
+	if (Target.IsValid() && Target == ParametersFor)
+	{
+		SetVector(NewColor, Info, true);
+	}
+}
+
+void SRenderStudioMaterialPanel::CloseColorPicker()
+{
+	if (bColorPickerOpen)
+	{
+		DestroyColorPicker();
+		bColorPickerOpen = false;
+	}
 }
 
 void SRenderStudioMaterialPanel::CommitMaterialChange(UMaterialInterface* Material)

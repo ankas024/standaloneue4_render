@@ -1151,17 +1151,17 @@ void SRenderStudioMainFrame::OnSaveScreenshot()
 
 void SRenderStudioMainFrame::OnExit()
 {
-	if (!ConfirmCloseDocument(OnExitRequested.IsBound()))
-	{
-		return;
-	}
-
 	if (OnExitRequested.IsBound())
 	{
-		OnExitRequested.Execute();
+		// Application: ask here, then quit
+		if (ConfirmCloseDocument(true))
+		{
+			OnExitRequested.Execute();
+		}
 	}
 	else if (TSharedPtr<SDockTab> Tab = OwnerTab.Pin())
 	{
+		// Inside the editor the tab asks about unsaved changes itself when it closes
 		Tab->RequestCloseTab();
 	}
 }
@@ -1264,9 +1264,25 @@ bool SRenderStudioMainFrame::HasBookmark(int32 Index) const
 
 void SRenderStudioMainFrame::OnResetLayout()
 {
+	// A tab manager will not spawn a tab while the previous instance is alive, so close the
+	// current panels and tear the old dock area down first; rebuild on the next frame, once the
+	// old tabs are gone.
+	for (const FName& TabId : { ViewportTabId, OutlinerTabId, PropertiesTabId, MaterialsTabId, EnvironmentTabId })
+	{
+		if (TSharedPtr<SDockTab> Tab = TabManager->FindExistingLiveTab(FTabId(TabId)))
+		{
+			Tab->RequestCloseTab();
+		}
+	}
+	DockingAreaHost->SetContent(SNullWidget::NullWidget);
 	TabManager->CloseAllAreas();
-	RestoreLayout(MakeDefaultLayout());
-	SetStatus(LOCTEXT("LayoutReset", "Layout reset"));
+
+	RegisterActiveTimer(0.0f, FWidgetActiveTimerDelegate::CreateLambda([this](double, float)
+	{
+		RestoreLayout(MakeDefaultLayout());
+		SetStatus(LOCTEXT("LayoutReset", "Layout reset"));
+		return EActiveTimerReturnType::Stop;
+	}));
 }
 
 //////////////////////////////////////////////////////////////////////////

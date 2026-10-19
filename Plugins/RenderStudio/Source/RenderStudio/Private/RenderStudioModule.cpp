@@ -5,6 +5,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
 #include "Interfaces/IMainFrameModule.h"
+#include "CoreGlobals.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Modules/ModuleManager.h"
@@ -180,10 +181,26 @@ TSharedRef<SDockTab> FRenderStudioModule::SpawnAppTab(const FSpawnTabArgs& Args)
 
 void FRenderStudioModule::RequestQuit()
 {
-	// Goes through the normal editor shutdown (layout and settings are saved on the way out).
-	if (GEngine)
+	// Unsaved work has been dealt with by the caller. Close through the main frame, like its own
+	// close button does: that runs the editor's shutdown (layouts and settings are saved) and
+	// requests engine exit.
+	if (FModuleManager::Get().IsModuleLoaded("MainFrame"))
 	{
-		GEngine->DeferredCommands.Add(TEXT("QUIT_EDITOR"));
+		FModuleManager::GetModuleChecked<IMainFrameModule>("MainFrame").RequestCloseEditor();
+	}
+	else
+	{
+		RequestEngineExit(TEXT("Render Studio closed"));
+	}
+
+	// Release the window (preview world, viewport, thumbnails) while Slate and the renderer are
+	// still running, rather than at module shutdown.
+	if (IsEngineExitRequested() && AppWindow.IsValid())
+	{
+		TSharedRef<SWindow> Window = AppWindow.ToSharedRef();
+		AppMainFrame.Reset();
+		AppWindow.Reset();
+		FSlateApplication::Get().RequestDestroyWindow(Window);
 	}
 }
 

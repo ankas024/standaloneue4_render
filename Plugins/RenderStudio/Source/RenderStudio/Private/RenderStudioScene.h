@@ -95,7 +95,8 @@ public:
 	// Undo / redo (scene objects, labels, transforms, properties and material assignments)
 	/** Records the current state before a change. Nested calls are merged into the outermost one. */
 	void BeginChange(const FText& Description);
-	void EndChange();
+	/** Closes a change. bDiscard drops the recorded step (the operation turned out to change nothing). */
+	void EndChange(bool bDiscard = false);
 	bool CanUndo() const { return UndoStack.Num() > 0; }
 	bool CanRedo() const { return RedoStack.Num() > 0; }
 	FText GetUndoDescription() const;
@@ -230,6 +231,8 @@ private:
 	TArray<FUndoState> UndoStack;
 	TArray<FUndoState> RedoStack;
 	int32 ChangeDepth;
+	/** True while the outermost open change has pushed an undo step */
+	bool bChangePushed;
 	bool bRestoringState;
 	double LastPropertyChangeTime;
 	TWeakObjectPtr<UObject> LastPropertyChangeObject;

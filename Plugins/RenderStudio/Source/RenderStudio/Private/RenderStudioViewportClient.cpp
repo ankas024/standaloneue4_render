@@ -5,7 +5,7 @@
 #include "EngineModule.h"
 #include "EngineUtils.h"
 #include "Engine/TextureRenderTarget2D.h"
-#include "HighResScreenshot.h"
+#include "HAL/FileManager.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
 #include "LegacyScreenPercentageDriver.h"
@@ -65,6 +65,7 @@ FRenderStudioViewportClient::FRenderStudioViewportClient(const TSharedRef<FRende
 	, SceneWeak(InScene)
 	, AdvancedPreviewScene(&InScene->GetPreviewScene().Get())
 	, bManipulating(false)
+	, bMovedDuringDrag(false)
 {
 	SetViewMode(VMI_Lit);
 	SetRealtime(true);
@@ -168,6 +169,8 @@ bool FRenderStudioViewportClient::InputWidgetDelta(FViewport* InViewport, EAxisL
 		return false;
 	}
 
+	bMovedDuringDrag = true;
+
 	if (!Drag.IsZero())
 	{
 		Actor->AddActorWorldOffset(Drag);
@@ -193,7 +196,8 @@ void FRenderStudioViewportClient::TrackingStarted(const FInputEventState& InInpu
 
 	if (bManipulating)
 	{
-		// One undo step per gizmo drag
+		// One undo step per gizmo drag (dropped again if the gizmo was only clicked)
+		bMovedDuringDrag = false;
 		Scene->BeginChange(LOCTEXT("TransformObject", "Transform"));
 	}
 }
@@ -204,7 +208,7 @@ void FRenderStudioViewportClient::TrackingStopped()
 	{
 		if (TSharedPtr<FRenderStudioScene> Scene = SceneWeak.Pin())
 		{
-			Scene->EndChange();
+			Scene->EndChange(!bMovedDuringDrag);
 		}
 	}
 	bManipulating = false;
@@ -353,14 +357,15 @@ FString FRenderStudioViewportClient::SaveScreenshot(const FString& InFilename)
 	const int32 Multiplier = FMath::Clamp(GetDefault<URenderStudioSettings>()->ScreenshotResolutionMultiplier, 1, 4);
 	if (Multiplier > 1)
 	{
-		// Supersampled path: the engine renders the view again at N x resolution and writes the file itself.
-		FHighResScreenshotConfig& Config = GetHighResScreenshotConfig();
-		Config.SetResolution(Viewport->GetSizeXY().X * Multiplier, Viewport->GetSizeXY().Y * Multiplier);
-		Config.SetFilename(FPaths::ChangeExtension(Filename, TEXT("")));
-		Config.SetMaskEnabled(false);
-		Config.SetHDRCapture(false);
-		Viewport->TakeHighResScreenShot();
-		return Filename;
+		// Supersampled: render the viewport's camera off screen at N x and filter down
+		FRenderStudioRenderSettings Settings;
+		Settings.Width = Viewport->GetSizeXY().X;
+		Settings.Height = Viewport->GetSizeXY().Y;
+		Settings.Supersampling = Multiplier;
+		Settings.Samples = 8;
+
+		TArray<FColor> SupersampledPixels;
+		return RenderImage(Settings, SupersampledPixels) && SaveImage(Filename, SupersampledPixels, Settings.Width, Settings.Height) ? Filename : FString();
 	}
 
 	// Make sure the latest frame (with the gizmo hidden) is what we read back.
@@ -400,9 +405,12 @@ bool FRenderStudioViewportClient::RenderImage(const FRenderStudioRenderSettings&
 		return false;
 	}
 
-	// 8-bit, non-sRGB target: the tonemapper already writes display-encoded values.
+	// 8-bit, non-sRGB target: the tonemapper already writes display-encoded values. Render
+	// targets default to a display gamma of 1.0, which would make the tonemapper apply an extra
+	// 2.2 power curve (much darker than the viewport), so use the viewport's display gamma.
 	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>(GetTransientPackage());
 	RenderTarget->RenderTargetFormat = RTF_RGBA8;
+	RenderTarget->TargetGamma = GEngine ? GEngine->GetDisplayGamma() : 2.2f;
 	RenderTarget->ClearColor = FLinearColor::Black;
 	RenderTarget->InitAutoFormat(RenderWidth, RenderHeight);
 	RenderTarget->UpdateResourceImmediate(true);
@@ -510,16 +518,16 @@ bool FRenderStudioViewportClient::SaveImage(const FString& Filename, const TArra
 		return false;
 	}
 
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Filename), true);
+
 	const FString Extension = FPaths::GetExtension(Filename).ToLower();
-	EImageFormat Format = EImageFormat::PNG;
-	if (Extension == TEXT("jpg") || Extension == TEXT("jpeg"))
+	if (Extension == TEXT("bmp"))
 	{
-		Format = EImageFormat::JPEG;
+		// The BMP image wrapper can only decode in 4.27 (compressing asserts): use the bitmap writer
+		return FFileHelper::CreateBitmap(*FPaths::ChangeExtension(Filename, TEXT("bmp")), Width, Height, Pixels.GetData());
 	}
-	else if (Extension == TEXT("bmp"))
-	{
-		Format = EImageFormat::BMP;
-	}
+
+	const EImageFormat Format = (Extension == TEXT("jpg") || Extension == TEXT("jpeg")) ? EImageFormat::JPEG : EImageFormat::PNG;
 
 	IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
 	TSharedPtr<IImageWrapper> Writer = ImageWrapperModule.CreateImageWrapper(Format);
@@ -528,7 +536,6 @@ bool FRenderStudioViewportClient::SaveImage(const FString& Filename, const TArra
 		return false;
 	}
 
-	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Filename), true);
 	const TArray64<uint8>& Compressed = Writer->GetCompressed(Format == EImageFormat::JPEG ? 95 : 0);
 	return FFileHelper::SaveArrayToFile(Compressed, *Filename);
 }

@@ -85,6 +85,7 @@ FRenderStudioScene::FRenderStudioScene()
 	, DefaultMaterial(nullptr)
 	, bDirty(false)
 	, ChangeDepth(0)
+	, bChangePushed(false)
 	, bRestoringState(false)
 	, LastPropertyChangeTime(0.0)
 {
@@ -183,15 +184,27 @@ void FRenderStudioScene::ResetHistory()
 
 void FRenderStudioScene::BeginChange(const FText& Description)
 {
-	if (ChangeDepth++ == 0 && !bRestoringState)
+	if (ChangeDepth++ == 0)
 	{
-		PushUndoState(Description);
+		bChangePushed = !bRestoringState;
+		if (bChangePushed)
+		{
+			PushUndoState(Description);
+		}
 	}
 }
 
-void FRenderStudioScene::EndChange()
+void FRenderStudioScene::EndChange(bool bDiscard)
 {
 	ChangeDepth = FMath::Max(0, ChangeDepth - 1);
+	if (ChangeDepth == 0 && bDiscard && bChangePushed && UndoStack.Num() > 0)
+	{
+		UndoStack.Pop();
+	}
+	if (ChangeDepth == 0)
+	{
+		bChangePushed = false;
+	}
 }
 
 void FRenderStudioScene::PushUndoState(const FText& Description)
@@ -206,6 +219,9 @@ void FRenderStudioScene::PushUndoState(const FText& Description)
 	}
 	RedoStack.Reset();
 	MarkDirty();
+
+	// A new step ends any burst of Properties panel edits
+	LastPropertyChangeObject.Reset();
 }
 
 FText FRenderStudioScene::GetUndoDescription() const
@@ -231,6 +247,7 @@ void FRenderStudioScene::Undo()
 	RedoState.State = ExportObjects();
 
 	ImportObjects(State.State.ToSharedRef());
+	LastPropertyChangeObject.Reset();
 	MarkDirty();
 }
 
@@ -247,6 +264,7 @@ void FRenderStudioScene::Redo()
 	UndoState.State = ExportObjects();
 
 	ImportObjects(State.State.ToSharedRef());
+	LastPropertyChangeObject.Reset();
 	MarkDirty();
 }
 
@@ -273,13 +291,12 @@ void FRenderStudioScene::OnPreObjectPropertyChanged(UObject* Object, const FEdit
 	// Slider drags fire this every frame: merge bursts on the same object into one undo step
 	const double Now = FPlatformTime::Seconds();
 	const bool bSameBurst = LastPropertyChangeObject.Get() == Object && (Now - LastPropertyChangeTime) < 1.0;
-	LastPropertyChangeTime = Now;
-	LastPropertyChangeObject = Object;
-
 	if (!bSameBurst)
 	{
 		PushUndoState(LOCTEXT("EditProperties", "Edit Properties"));
 	}
+	LastPropertyChangeTime = Now;
+	LastPropertyChangeObject = Object;
 }
 
 void FRenderStudioScene::OnObjectPropertyChanged(UObject* Object, FPropertyChangedEvent& Event)

@@ -1,0 +1,18 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "Render Studio",
+	"Description": "Standalone look-dev / rendering application shell (Marmoset Toolbag style) on top of the UE4 renderer and material editor.",
+	"Category": "Rendering",
+	"CreatedBy": "",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"Modules": [
+		{
+			"Name": "RenderStudio",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit"
+		}
+	]
+}

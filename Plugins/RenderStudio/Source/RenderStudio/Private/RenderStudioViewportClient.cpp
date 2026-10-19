@@ -86,7 +86,8 @@ FRenderStudioViewportClient::FRenderStudioViewportClient(const TSharedRef<FRende
 	bUsingOrbitCamera = true;
 	bSetListenerPosition = false;
 
-	SetWidgetMode(FWidget::WM_Translate);
+	// The move gizmo is the mode tools' default. (SetWidgetMode cannot be called here: it reads the
+	// viewport, which is only attached once the widget has been constructed.)
 
 	// Three-quarter hero angle; FrameScene() then pulls the camera back along it.
 	SetViewLocation(FVector(-320.0f, 220.0f, 200.0f));

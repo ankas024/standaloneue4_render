@@ -14,6 +14,7 @@ public:
 	// File
 	TSharedPtr<FUICommandInfo> NewScene;
 	TSharedPtr<FUICommandInfo> ImportMesh;
+	TSharedPtr<FUICommandInfo> SaveAll;
 	TSharedPtr<FUICommandInfo> SaveScreenshot;
 	TSharedPtr<FUICommandInfo> Exit;
 

@@ -15,6 +15,7 @@ public class RenderStudio : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
+			"AppFramework",
 			"ApplicationCore",
 			"InputCore",
 			"Slate",
@@ -35,6 +36,7 @@ public class RenderStudio : ModuleRules
 			"RHI",
 			"ToolMenus",
 			"MainFrame",
+			"WorkspaceMenuStructure",
 		});
 	}
 }

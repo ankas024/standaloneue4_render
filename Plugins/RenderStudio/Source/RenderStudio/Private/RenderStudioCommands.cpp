@@ -17,6 +17,7 @@ void FRenderStudioCommands::RegisterCommands()
 {
 	UI_COMMAND(NewScene, "New Scene", "Clear the scene and start over with the default setup.", EUserInterfaceActionType::Button, FInputChord(EModifierKey::Control, EKeys::N));
 	UI_COMMAND(ImportMesh, "Import Mesh...", "Import an FBX or OBJ mesh into the scene.", EUserInterfaceActionType::Button, FInputChord(EModifierKey::Control, EKeys::I));
+	UI_COMMAND(SaveAll, "Save All", "Save every modified material, instance and imported mesh.", EUserInterfaceActionType::Button, FInputChord(EModifierKey::Control, EKeys::S));
 	UI_COMMAND(SaveScreenshot, "Save Screenshot...", "Render the viewport to a PNG image.", EUserInterfaceActionType::Button, FInputChord(EKeys::F12));
 	UI_COMMAND(Exit, "Exit", "Close Render Studio.", EUserInterfaceActionType::Button, FInputChord());
 

@@ -908,7 +908,7 @@ void SRenderStudioMainFrame::OnOpenScene()
 	}
 
 	TArray<FString> Files;
-	const FString& Directory = GetDefault<URenderStudioSettings>()->LastSceneDirectory;
+	const FString Directory = GetDefault<URenderStudioSettings>()->GetSceneDirectory();
 	if (DesktopPlatform->OpenFileDialog(GetParentWindowHandle(), LOCTEXT("OpenSceneTitle", "Open Scene").ToString(), Directory, TEXT(""),
 		RenderStudioMainFrame::SceneFileTypes, EFileDialogFlags::None, Files) && Files.Num() > 0)
 	{
@@ -968,7 +968,8 @@ bool SRenderStudioMainFrame::OnSaveSceneAs()
 	}
 
 	const URenderStudioSettings* Settings = GetDefault<URenderStudioSettings>();
-	const FString Directory = Scene->GetFilename().IsEmpty() ? Settings->LastSceneDirectory : FPaths::GetPath(Scene->GetFilename());
+	const FString Directory = Scene->GetFilename().IsEmpty() ? Settings->GetSceneDirectory() : FPaths::GetPath(Scene->GetFilename());
+	IFileManager::Get().MakeDirectory(*Directory, true);
 	const FString DefaultName = Scene->GetFilename().IsEmpty() ? FString(TEXT("Scene.rss")) : FPaths::GetCleanFilename(Scene->GetFilename());
 
 	TArray<FString> Files;

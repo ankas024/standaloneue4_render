@@ -38,7 +38,7 @@ public:
 	UPROPERTY(EditAnywhere, config, Category = "Screenshot", meta = (ClampMin = "1", ClampMax = "4"))
 	int32 ScreenshotResolutionMultiplier;
 
-	/** Folder screenshots and renders are written to (defaults to Saved/Screenshots/RenderStudio) */
+	/** Folder screenshots and renders are written to (defaults to Documents/Render Studio/Renders) */
 	UPROPERTY(EditAnywhere, config, Category = "Screenshot")
 	FDirectoryPath ScreenshotDirectory;
 
@@ -79,6 +79,8 @@ public:
 
 	FString GetContentFolder() const;
 	FString GetScreenshotDirectory() const;
+	/** Where the open / save dialogs start (last used folder, else Documents/Render Studio/Scenes) */
+	FString GetSceneDirectory() const;
 	FString GetImageExtension() const;
 	void AddRecentScene(const FString& Filename);
 

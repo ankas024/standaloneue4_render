@@ -2,7 +2,13 @@ Binaries/
 Intermediate/
 Saved/
 DerivedDataCache/
-Build/
+# UBT writes build receipts here; only the application icon is source
+Build/*
+!Build/Windows/
+Build/Windows/*
+!Build/Windows/Application.ico
+# Packaged application (Scripts/Package.bat)
+Dist/
 .vs/
 .vscode/
 *.sln

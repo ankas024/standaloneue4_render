@@ -1,5 +1,5 @@
 @echo off
-rem Launches Render Studio as a standalone application (level editor hidden).
+rem Development launch: runs Render Studio inside UE4Editor in application mode (level editor hidden).
 rem Usage: Scripts\RenderStudio.bat C:\UnrealEngine-4.27   (or set UE4_ROOT)
 setlocal
 set UE_ROOT=%~1

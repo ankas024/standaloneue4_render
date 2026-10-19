@@ -114,9 +114,12 @@ void FRenderStudioModule::OpenAppWindow()
 
 	AppWindow->SetRequestDestroyWindowOverride(FRequestDestroyWindowOverride::CreateRaw(this, &FRenderStudioModule::OnAppWindowCloseRequested));
 
-	// The panels are docked by a tab manager, which needs an owning tab inside this window.
-	// It is never shown: it only anchors the docking area (and floating panels) to the window.
-	TSharedRef<SDockTab> AnchorTab = SNew(SDockTab).TabRole(ETabRole::MajorTab);
+	// The panels are docked by a tab manager, which needs an owning tab inside this window: the
+	// tab manager finds its window by walking up from that tab. The tab is collapsed, so it is never
+	// laid out, painted or ticked (its close button would query a tab manager it does not have).
+	TSharedRef<SDockTab> AnchorTab = SNew(SDockTab)
+		.TabRole(ETabRole::MajorTab)
+		.Visibility(EVisibility::Collapsed);
 
 	AppMainFrame = SNew(SRenderStudioMainFrame, AnchorTab, AppWindow)
 		.OnExitRequested(FSimpleDelegate::CreateRaw(this, &FRenderStudioModule::OnExitRequested));
@@ -128,13 +131,9 @@ void FRenderStudioModule::OpenAppWindow()
 			AppMainFrame.ToSharedRef()
 		]
 		+ SOverlay::Slot()
-		.HAlign(HAlign_Left)
-		.VAlign(VAlign_Top)
 		[
 			SNew(SBox)
-			.WidthOverride(0.0f)
-			.HeightOverride(0.0f)
-			.Clipping(EWidgetClipping::ClipToBounds)
+			.Visibility(EVisibility::Collapsed)
 			[
 				AnchorTab
 			]

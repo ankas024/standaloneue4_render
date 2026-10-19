@@ -1,5 +1,5 @@
 @echo off
-rem Builds the Render Studio editor target against a UE 4.27 source build.
+rem Development build: compiles the project modules for UE4Editor (use Package.bat for the standalone app).
 rem Usage: Scripts\Build.bat C:\UnrealEngine-4.27   (or set UE4_ROOT)
 setlocal
 set UE_ROOT=%~1

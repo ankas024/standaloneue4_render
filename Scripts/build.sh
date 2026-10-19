@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Render Studio editor target against a UE 4.27 source build (Linux).
+# Development build: compiles the project modules for UE4Editor (use package.sh for the standalone app).
 # Usage: Scripts/build.sh /path/to/UnrealEngine-4.27   (or export UE4_ROOT)
 set -euo pipefail
 UE_ROOT="${1:-${UE4_ROOT:-}}"

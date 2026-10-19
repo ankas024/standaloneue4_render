@@ -1,5 +1,6 @@
 #include "RenderStudioSettings.h"
 
+#include "HAL/PlatformProcess.h"
 #include "Misc/Paths.h"
 
 URenderStudioSettings::URenderStudioSettings()
@@ -34,7 +35,16 @@ FString URenderStudioSettings::GetScreenshotDirectory() const
 	{
 		return ScreenshotDirectory.Path;
 	}
-	return FPaths::ScreenShotDir() / TEXT("RenderStudio");
+	return FString(FPlatformProcess::UserDir()) / TEXT("Render Studio") / TEXT("Renders");
+}
+
+FString URenderStudioSettings::GetSceneDirectory() const
+{
+	if (!LastSceneDirectory.IsEmpty())
+	{
+		return LastSceneDirectory;
+	}
+	return FString(FPlatformProcess::UserDir()) / TEXT("Render Studio") / TEXT("Scenes");
 }
 
 FString URenderStudioSettings::GetImageExtension() const

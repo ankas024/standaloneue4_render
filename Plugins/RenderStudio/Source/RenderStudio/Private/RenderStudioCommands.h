@@ -13,12 +13,18 @@ public:
 
 	// File
 	TSharedPtr<FUICommandInfo> NewScene;
+	TSharedPtr<FUICommandInfo> OpenScene;
+	TSharedPtr<FUICommandInfo> SaveScene;
+	TSharedPtr<FUICommandInfo> SaveSceneAs;
 	TSharedPtr<FUICommandInfo> ImportMesh;
-	TSharedPtr<FUICommandInfo> SaveAll;
+	TSharedPtr<FUICommandInfo> ImportEnvironment;
+	TSharedPtr<FUICommandInfo> RenderImage;
 	TSharedPtr<FUICommandInfo> SaveScreenshot;
 	TSharedPtr<FUICommandInfo> Exit;
 
 	// Edit
+	TSharedPtr<FUICommandInfo> Undo;
+	TSharedPtr<FUICommandInfo> Redo;
 	TSharedPtr<FUICommandInfo> DuplicateSelected;
 	TSharedPtr<FUICommandInfo> DeleteSelected;
 	TSharedPtr<FUICommandInfo> FocusSelected;
@@ -47,8 +53,19 @@ public:
 	TSharedPtr<FUICommandInfo> ResetCamera;
 	TSharedPtr<FUICommandInfo> ResetLayout;
 
+	// Camera
+	TSharedPtr<FUICommandInfo> ViewPerspective;
+	TSharedPtr<FUICommandInfo> ViewFront;
+	TSharedPtr<FUICommandInfo> ViewBack;
+	TSharedPtr<FUICommandInfo> ViewLeft;
+	TSharedPtr<FUICommandInfo> ViewRight;
+	TSharedPtr<FUICommandInfo> ViewTop;
+	TSharedPtr<FUICommandInfo> SaveBookmark[4];
+	TSharedPtr<FUICommandInfo> RecallBookmark[4];
+
 	// Material
 	TSharedPtr<FUICommandInfo> NewMaterial;
+	TSharedPtr<FUICommandInfo> NewMaterialGraph;
 	TSharedPtr<FUICommandInfo> NewMaterialInstance;
 	TSharedPtr<FUICommandInfo> EditMaterial;
 	TSharedPtr<FUICommandInfo> AssignMaterial;

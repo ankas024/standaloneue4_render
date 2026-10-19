@@ -3,6 +3,7 @@
 #include "AssetData.h"
 #include "AssetThumbnail.h"
 #include "Components/MeshComponent.h"
+#include "DragAndDrop/AssetDragDropOp.h"
 #include "EditorStyleSet.h"
 #include "Engine/Texture.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
@@ -16,6 +17,7 @@
 #include "SRenderStudioPanel.h"
 #include "Widgets/Colors/SColorBlock.h"
 #include "Widgets/Colors/SColorPicker.h"
+#include "Widgets/Input/SComboButton.h"
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -120,6 +122,10 @@ void SRenderStudioMaterialPanel::Construct(const FArguments& InArgs, const TShar
 						+ SHorizontalBox::Slot().AutoWidth().Padding(2.0f, 0.0f)
 						[
 							MakeCommandButton(Commands.AssignMaterial, LOCTEXT("Assign", "Assign"))
+						]
+						+ SHorizontalBox::Slot().AutoWidth().Padding(2.0f, 0.0f)
+						[
+							MakePresetButton()
 						]
 						+ SHorizontalBox::Slot().FillWidth(1.0f)
 						[
@@ -255,6 +261,16 @@ TSharedRef<ITableRow> SRenderStudioMaterialPanel::OnGenerateRow(FItem Item, cons
 	return SNew(STableRow<FItem>, OwnerTable)
 		.Style(&FRenderStudioStyle::Get().GetWidgetStyle<FTableRowStyle>("RenderStudio.TableRow"))
 		.Padding(FMargin(4.0f, 3.0f))
+		.ToolTipText(LOCTEXT("RowTooltip", "Drag onto an object in the viewport to assign. Double-click to open the node editor."))
+		.OnDragDetected_Lambda([Item](const FGeometry&, const FPointerEvent&)
+		{
+			// Dropping on the viewport assigns the material to the object under the cursor
+			if (UMaterialInterface* DraggedMaterial = Item.Get())
+			{
+				return FReply::Handled().BeginDragDrop(FAssetDragDropOp::New(FAssetData(DraggedMaterial)));
+			}
+			return FReply::Unhandled();
+		})
 		[
 			SNew(SHorizontalBox)
 
@@ -606,11 +622,47 @@ void SRenderStudioMaterialPanel::CommitMaterialChange(UMaterialInterface* Materi
 
 	Material->PostEditChange();
 	Material->MarkPackageDirty();
+	Scene->MarkDirty();
 
 	if (TSharedPtr<FAssetThumbnail>* Thumbnail = Thumbnails.Find(Material))
 	{
 		ThumbnailPool->RefreshThumbnail(*Thumbnail);
 	}
+}
+
+TSharedRef<SWidget> SRenderStudioMaterialPanel::MakePresetButton()
+{
+	return SNew(SComboButton)
+		.ToolTipText(LOCTEXT("PresetTooltip", "Apply a ready-made look (colour, metalness, roughness, specular) to the selected material instance."))
+		.IsEnabled_Lambda([this]()
+		{
+			UMaterialInterface* Material = Scene->GetSelectedMaterial();
+			return Material && Material->IsA<UMaterialInstanceConstant>() && Material->GetPathName().StartsWith(TEXT("/Game/"));
+		})
+		.ButtonContent()
+		[
+			SNew(STextBlock)
+			.TextStyle(&FRenderStudioStyle::Get().GetWidgetStyle<FTextBlockStyle>("RenderStudio.Text"))
+			.Text(LOCTEXT("Preset", "Preset"))
+		]
+		.OnGetMenuContent_Lambda([this]()
+		{
+			FMenuBuilder MenuBuilder(true, nullptr);
+			const TArray<FRenderStudioMaterialPreset>& Presets = FRenderStudioScene::GetMaterialPresets();
+			for (int32 Index = 0; Index < Presets.Num(); ++Index)
+			{
+				MenuBuilder.AddMenuEntry(FText::FromString(Presets[Index].Name), FText::GetEmpty(), FSlateIcon(),
+					FUIAction(FExecuteAction::CreateLambda([this, Index]()
+					{
+						if (UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(Scene->GetSelectedMaterial()))
+						{
+							Scene->ApplyPreset(Instance, FRenderStudioScene::GetMaterialPresets()[Index]);
+							CommitMaterialChange(Instance);
+						}
+					})));
+			}
+			return MenuBuilder.MakeWidget();
+		});
 }
 
 FText SRenderStudioMaterialPanel::GetSelectedMaterialTitle() const

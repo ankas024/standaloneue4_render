@@ -4,18 +4,23 @@
 #include "DesktopPlatformModule.h"
 #include "DynamicRHI.h"
 #include "EditorStyleSet.h"
+#include "Engine/TextureCube.h"
 #include "FileHelpers.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Commands/UICommandList.h"
 #include "Framework/Docking/LayoutService.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "GameFramework/Actor.h"
+#include "HAL/FileManager.h"
 #include "IDesktopPlatform.h"
 #include "IDetailsView.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceConstant.h"
+#include "Misc/CommandLine.h"
 #include "Misc/MessageDialog.h"
+#include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "UObject/Package.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
 #include "RenderStudioCommands.h"
@@ -27,6 +32,7 @@
 #include "SRenderStudioMaterialPanel.h"
 #include "SRenderStudioOutliner.h"
 #include "SRenderStudioPanel.h"
+#include "SRenderStudioRenderDialog.h"
 #include "SRenderStudioViewport.h"
 #include "UnrealWidget.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -46,6 +52,8 @@ const FName SRenderStudioMainFrame::EnvironmentTabId(TEXT("RenderStudio_Environm
 
 namespace RenderStudioMainFrame
 {
+	static const TCHAR* SceneFileTypes = TEXT("Render Studio scene (*.rss)|*.rss");
+
 	/** Categories that only matter for games; hidden to keep the properties panel artist friendly. */
 	static bool IsHiddenCategory(const FString& Category)
 	{
@@ -82,6 +90,8 @@ SRenderStudioMainFrame::~SRenderStudioMainFrame()
 	if (Scene.IsValid())
 	{
 		Scene->OnSelectionChanged().RemoveAll(this);
+		Scene->OnDocumentChanged().RemoveAll(this);
+		Scene->OnSceneLoaded().RemoveAll(this);
 	}
 
 	if (TabManager.IsValid())
@@ -102,6 +112,8 @@ void SRenderStudioMainFrame::Construct(const FArguments& InArgs, const TSharedRe
 	Scene = MakeShared<FRenderStudioScene>();
 	Scene->Initialize();
 	Scene->OnSelectionChanged().AddSP(this, &SRenderStudioMainFrame::OnSceneSelectionChanged);
+	Scene->OnDocumentChanged().AddSP(this, &SRenderStudioMainFrame::UpdateTitle);
+	Scene->OnSceneLoaded().AddSP(this, &SRenderStudioMainFrame::OnSceneLoaded);
 
 	CommandList = MakeShared<FUICommandList>();
 	BindCommands();
@@ -167,6 +179,14 @@ void SRenderStudioMainFrame::Construct(const FArguments& InArgs, const TSharedRe
 
 	RestoreLayout(FLayoutSaveRestore::LoadFromConfig(GEditorLayoutIni, MakeDefaultLayout()));
 	OnSceneSelectionChanged();
+	UpdateTitle();
+
+	// RenderStudio.exe -Scene="C:/Scenes/Watch.rss"
+	FString StartupScene;
+	if (FParse::Value(FCommandLine::Get(), TEXT("Scene="), StartupScene) && !StartupScene.IsEmpty())
+	{
+		OpenSceneFile(StartupScene);
+	}
 }
 
 FReply SRenderStudioMainFrame::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
@@ -206,7 +226,7 @@ void SRenderStudioMainFrame::RegisterTabSpawners()
 
 TSharedRef<FTabManager::FLayout> SRenderStudioMainFrame::MakeDefaultLayout() const
 {
-	return FTabManager::NewLayout("RenderStudio_Layout_v1")
+	return FTabManager::NewLayout("RenderStudio_Layout_v2")
 		->AddArea
 		(
 			FTabManager::NewPrimaryArea()
@@ -305,7 +325,11 @@ TSharedRef<SDockTab> SRenderStudioMainFrame::SpawnMaterialsTab(const FSpawnTabAr
 TSharedRef<SDockTab> SRenderStudioMainFrame::SpawnEnvironmentTab(const FSpawnTabArgs& Args)
 {
 	// Sky HDRI, sun, sky light and post-processing come from the asset viewer profile system,
-	// the application settings (camera FOV, grid, screenshots) are shown underneath.
+	// the application settings (camera FOV, grid, render and screenshot options) are shown underneath.
+	TArray<FAdvancedPreviewSceneModule::FDetailCustomizationInfo> DetailCustomizations;
+	TArray<FAdvancedPreviewSceneModule::FPropertyTypeCustomizationInfo> PropertyTypeCustomizations;
+	TArray<FAdvancedPreviewSceneModule::FDetailDelegates> Delegates;
+
 	return SNew(SDockTab)
 		.Label(LOCTEXT("EnvironmentTab", "Environment & Render"))
 		.TabRole(ETabRole::PanelTab)
@@ -315,6 +339,9 @@ TSharedRef<SDockTab> SRenderStudioMainFrame::SpawnEnvironmentTab(const FSpawnTab
 			[
 				SNew(SAdvancedPreviewDetailsTab, Scene->GetPreviewScene())
 				.AdditionalSettings(Scene->GetSettings())
+				.DetailCustomizations(DetailCustomizations)
+				.PropertyTypeCustomizations(PropertyTypeCustomizations)
+				.Delegates(Delegates)
 			]
 		];
 }
@@ -329,6 +356,7 @@ TSharedRef<SWidget> SRenderStudioMainFrame::MakeMenuBar()
 	MenuBar.AddPullDownMenu(LOCTEXT("EditMenu", "Edit"), FText::GetEmpty(), FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillEditMenu));
 	MenuBar.AddPullDownMenu(LOCTEXT("CreateMenu", "Create"), FText::GetEmpty(), FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillCreateMenu));
 	MenuBar.AddPullDownMenu(LOCTEXT("ViewMenu", "View"), FText::GetEmpty(), FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillViewMenu));
+	MenuBar.AddPullDownMenu(LOCTEXT("EnvironmentMenu", "Environment"), FText::GetEmpty(), FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillEnvironmentMenu));
 	MenuBar.AddPullDownMenu(LOCTEXT("MaterialMenu", "Material"), FText::GetEmpty(), FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillMaterialMenu));
 	MenuBar.AddPullDownMenu(LOCTEXT("WindowMenu", "Window"), FText::GetEmpty(), FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillWindowMenu));
 	MenuBar.AddPullDownMenu(LOCTEXT("HelpMenu", "Help"), FText::GetEmpty(), FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillHelpMenu));
@@ -346,10 +374,18 @@ void SRenderStudioMainFrame::FillFileMenu(FMenuBuilder& MenuBuilder)
 	const FRenderStudioCommands& Commands = FRenderStudioCommands::Get();
 	MenuBuilder.BeginSection("Scene", LOCTEXT("SceneSection", "Scene"));
 	MenuBuilder.AddMenuEntry(Commands.NewScene);
+	MenuBuilder.AddMenuEntry(Commands.OpenScene);
+	MenuBuilder.AddSubMenu(LOCTEXT("RecentScenes", "Open Recent"), LOCTEXT("RecentScenesTooltip", "Scenes you opened or saved recently."),
+		FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillRecentScenesMenu));
+	MenuBuilder.AddMenuEntry(Commands.SaveScene);
+	MenuBuilder.AddMenuEntry(Commands.SaveSceneAs);
+	MenuBuilder.EndSection();
+	MenuBuilder.BeginSection("Import", LOCTEXT("ImportSection", "Import"));
 	MenuBuilder.AddMenuEntry(Commands.ImportMesh);
-	MenuBuilder.AddMenuEntry(Commands.SaveAll);
+	MenuBuilder.AddMenuEntry(Commands.ImportEnvironment);
 	MenuBuilder.EndSection();
 	MenuBuilder.BeginSection("Output", LOCTEXT("OutputSection", "Output"));
+	MenuBuilder.AddMenuEntry(Commands.RenderImage);
 	MenuBuilder.AddMenuEntry(Commands.SaveScreenshot);
 	MenuBuilder.EndSection();
 	MenuBuilder.BeginSection("Exit", FText::GetEmpty());
@@ -357,9 +393,38 @@ void SRenderStudioMainFrame::FillFileMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.EndSection();
 }
 
+void SRenderStudioMainFrame::FillRecentScenesMenu(FMenuBuilder& MenuBuilder)
+{
+	const TArray<FString>& RecentScenes = GetDefault<URenderStudioSettings>()->RecentScenes;
+	if (RecentScenes.Num() == 0)
+	{
+		MenuBuilder.AddMenuEntry(LOCTEXT("NoRecentScenes", "(none)"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([]() { return false; })));
+		return;
+	}
+
+	for (const FString& Filename : RecentScenes)
+	{
+		MenuBuilder.AddMenuEntry(
+			FText::FromString(FPaths::GetBaseFilename(Filename)),
+			FText::FromString(Filename),
+			FSlateIcon(),
+			FUIAction(FExecuteAction::CreateLambda([this, Filename]()
+			{
+				if (ConfirmCloseDocument())
+				{
+					OpenSceneFile(Filename);
+				}
+			})));
+	}
+}
+
 void SRenderStudioMainFrame::FillEditMenu(FMenuBuilder& MenuBuilder)
 {
 	const FRenderStudioCommands& Commands = FRenderStudioCommands::Get();
+	MenuBuilder.BeginSection("History", LOCTEXT("HistorySection", "History"));
+	MenuBuilder.AddMenuEntry(Commands.Undo, NAME_None, TAttribute<FText>(this, &SRenderStudioMainFrame::GetUndoLabel));
+	MenuBuilder.AddMenuEntry(Commands.Redo, NAME_None, TAttribute<FText>(this, &SRenderStudioMainFrame::GetRedoLabel));
+	MenuBuilder.EndSection();
 	MenuBuilder.BeginSection("Object", LOCTEXT("ObjectSection", "Object"));
 	MenuBuilder.AddMenuEntry(Commands.DuplicateSelected);
 	MenuBuilder.AddMenuEntry(Commands.DeleteSelected);
@@ -388,6 +453,9 @@ void SRenderStudioMainFrame::FillCreateMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.AddMenuEntry(Commands.AddSpotLight);
 	MenuBuilder.AddMenuEntry(Commands.AddRectLight);
 	MenuBuilder.EndSection();
+	MenuBuilder.BeginSection("Meshes", LOCTEXT("MeshesSection", "Meshes"));
+	MenuBuilder.AddMenuEntry(Commands.ImportMesh);
+	MenuBuilder.EndSection();
 }
 
 void SRenderStudioMainFrame::FillViewMenu(FMenuBuilder& MenuBuilder)
@@ -399,20 +467,115 @@ void SRenderStudioMainFrame::FillViewMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.AddMenuEntry(Commands.ToggleEnvironment);
 	MenuBuilder.AddMenuEntry(Commands.ToggleTurntable);
 	MenuBuilder.EndSection();
-	MenuBuilder.BeginSection("Camera", LOCTEXT("CameraSection", "Camera"));
-	MenuBuilder.AddMenuEntry(Commands.ResetCamera);
-	MenuBuilder.AddMenuEntry(Commands.FocusSelected);
+	MenuBuilder.BeginSection("Views", LOCTEXT("ViewsSection", "Camera Views"));
+	MenuBuilder.AddMenuEntry(Commands.ViewPerspective);
+	MenuBuilder.AddMenuEntry(Commands.ViewFront);
+	MenuBuilder.AddMenuEntry(Commands.ViewBack);
+	MenuBuilder.AddMenuEntry(Commands.ViewLeft);
+	MenuBuilder.AddMenuEntry(Commands.ViewRight);
+	MenuBuilder.AddMenuEntry(Commands.ViewTop);
 	MenuBuilder.EndSection();
+	MenuBuilder.BeginSection("Camera", LOCTEXT("CameraSection", "Camera"));
+	MenuBuilder.AddMenuEntry(Commands.FocusSelected);
+	MenuBuilder.AddMenuEntry(Commands.ResetCamera);
+	MenuBuilder.AddSubMenu(LOCTEXT("CameraBookmarks", "Camera Bookmarks"), LOCTEXT("CameraBookmarksTooltip", "Store and recall up to four cameras. They are saved with the scene."),
+		FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillCameraBookmarksMenu));
+	MenuBuilder.EndSection();
+}
+
+void SRenderStudioMainFrame::FillCameraBookmarksMenu(FMenuBuilder& MenuBuilder)
+{
+	const FRenderStudioCommands& Commands = FRenderStudioCommands::Get();
+	MenuBuilder.BeginSection("Recall", LOCTEXT("RecallSection", "Jump To"));
+	for (int32 Index = 0; Index < FRenderStudioScene::NumBookmarks; ++Index)
+	{
+		MenuBuilder.AddMenuEntry(Commands.RecallBookmark[Index]);
+	}
+	MenuBuilder.EndSection();
+	MenuBuilder.BeginSection("Store", LOCTEXT("StoreSection", "Store Current Camera"));
+	for (int32 Index = 0; Index < FRenderStudioScene::NumBookmarks; ++Index)
+	{
+		MenuBuilder.AddMenuEntry(Commands.SaveBookmark[Index]);
+	}
+	MenuBuilder.EndSection();
+}
+
+void SRenderStudioMainFrame::FillEnvironmentMenu(FMenuBuilder& MenuBuilder)
+{
+	const FRenderStudioCommands& Commands = FRenderStudioCommands::Get();
+	MenuBuilder.BeginSection("Sky", LOCTEXT("SkySection", "Sky"));
+	MenuBuilder.AddSubMenu(LOCTEXT("SkyMaps", "HDRI"), LOCTEXT("SkyMapsTooltip", "Pick the panorama used for the backdrop and image based lighting."),
+		FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillSkyMenu));
+	MenuBuilder.AddMenuEntry(Commands.ImportEnvironment);
+	MenuBuilder.AddMenuEntry(Commands.ToggleEnvironment);
+	MenuBuilder.AddMenuEntry(Commands.ToggleTurntable);
+	MenuBuilder.EndSection();
+	MenuBuilder.BeginSection("Ground", LOCTEXT("GroundSection", "Ground"));
+	MenuBuilder.AddMenuEntry(Commands.ToggleFloor);
+	MenuBuilder.AddMenuEntry(Commands.ToggleGrid);
+	MenuBuilder.EndSection();
+}
+
+void SRenderStudioMainFrame::FillSkyMenu(FMenuBuilder& MenuBuilder)
+{
+	const TArray<UTextureCube*> Maps = Scene->GetEnvironmentMaps();
+	if (Maps.Num() == 0)
+	{
+		MenuBuilder.AddMenuEntry(LOCTEXT("NoSkyMaps", "(no HDRIs found - use Import HDRI)"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([]() { return false; })));
+		return;
+	}
+
+	for (UTextureCube* Map : Maps)
+	{
+		TWeakObjectPtr<UTextureCube> WeakMap = Map;
+		MenuBuilder.AddMenuEntry(
+			FText::FromString(Map->GetName()),
+			FText::FromString(Map->GetPathName()),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateLambda([this, WeakMap]()
+				{
+					if (UTextureCube* Cubemap = WeakMap.Get())
+					{
+						Scene->SetEnvironmentMap(Cubemap);
+						SetStatus(FText::Format(LOCTEXT("SkyChanged", "Sky: {0}"), FText::FromString(Cubemap->GetName())));
+					}
+				}),
+				FCanExecuteAction(),
+				FIsActionChecked::CreateLambda([this, WeakMap]() { return WeakMap.IsValid() && Scene->GetEnvironmentMap() == WeakMap.Get(); })),
+			NAME_None,
+			EUserInterfaceActionType::RadioButton);
+	}
 }
 
 void SRenderStudioMainFrame::FillMaterialMenu(FMenuBuilder& MenuBuilder)
 {
 	const FRenderStudioCommands& Commands = FRenderStudioCommands::Get();
+	MenuBuilder.BeginSection("Create", LOCTEXT("MaterialCreateSection", "Create"));
 	MenuBuilder.AddMenuEntry(Commands.NewMaterial);
+	MenuBuilder.AddSubMenu(LOCTEXT("NewFromPreset", "New From Preset"), LOCTEXT("NewFromPresetTooltip", "Create a material with a ready-made look and assign it to the selection."),
+		FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillPresetMenu, false));
+	MenuBuilder.AddMenuEntry(Commands.NewMaterialGraph);
 	MenuBuilder.AddMenuEntry(Commands.NewMaterialInstance);
-	MenuBuilder.AddMenuSeparator();
+	MenuBuilder.EndSection();
+	MenuBuilder.BeginSection("Edit", LOCTEXT("MaterialEditSection", "Edit"));
 	MenuBuilder.AddMenuEntry(Commands.AssignMaterial);
+	MenuBuilder.AddSubMenu(LOCTEXT("ApplyPreset", "Apply Preset"), LOCTEXT("ApplyPresetTooltip", "Set the selected material instance's colour, metalness, roughness and specular from a preset."),
+		FNewMenuDelegate::CreateSP(this, &SRenderStudioMainFrame::FillPresetMenu, true));
 	MenuBuilder.AddMenuEntry(Commands.EditMaterial);
+	MenuBuilder.EndSection();
+}
+
+void SRenderStudioMainFrame::FillPresetMenu(FMenuBuilder& MenuBuilder, bool bApplyToSelected)
+{
+	const TArray<FRenderStudioMaterialPreset>& Presets = FRenderStudioScene::GetMaterialPresets();
+	for (int32 Index = 0; Index < Presets.Num(); ++Index)
+	{
+		FUIAction Action = bApplyToSelected
+			? FUIAction(FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnApplyPreset, Index), FCanExecuteAction::CreateSP(this, &SRenderStudioMainFrame::HasSelectedInstance))
+			: FUIAction(FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnNewMaterialFromPreset, Index));
+		MenuBuilder.AddMenuEntry(FText::FromString(Presets[Index].Name), FText::GetEmpty(), FSlateIcon(), Action);
+	}
 }
 
 void SRenderStudioMainFrame::FillWindowMenu(FMenuBuilder& MenuBuilder)
@@ -427,6 +590,8 @@ void SRenderStudioMainFrame::FillWindowMenu(FMenuBuilder& MenuBuilder)
 
 void SRenderStudioMainFrame::FillHelpMenu(FMenuBuilder& MenuBuilder)
 {
+	MenuBuilder.AddMenuEntry(LOCTEXT("Controls", "Controls..."), LOCTEXT("ControlsTooltip", "Mouse and keyboard reference."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnShowControls)));
 	MenuBuilder.AddMenuEntry(FRenderStudioCommands::Get().About);
 }
 
@@ -441,9 +606,15 @@ TSharedRef<SWidget> SRenderStudioMainFrame::MakeToolbar()
 
 	Toolbar.BeginSection("File");
 	Toolbar.AddToolBarButton(Commands.NewScene, NAME_None, LOCTEXT("TB_New", "New"), TAttribute<FText>(), FSlateIcon(EditorStyle, "LevelEditor.NewLevel"));
-	Toolbar.AddToolBarButton(Commands.ImportMesh, NAME_None, LOCTEXT("TB_Import", "Import"), TAttribute<FText>(), FSlateIcon(EditorStyle, "LevelEditor.OpenLevel"));
-	Toolbar.AddToolBarButton(Commands.SaveAll, NAME_None, LOCTEXT("TB_Save", "Save"), TAttribute<FText>(), FSlateIcon(EditorStyle, "AssetEditor.SaveAsset"));
-	Toolbar.AddToolBarButton(Commands.SaveScreenshot, NAME_None, LOCTEXT("TB_Shot", "Screenshot"), TAttribute<FText>(), FSlateIcon(EditorStyle, "HighresScreenshot.Capture"));
+	Toolbar.AddToolBarButton(Commands.OpenScene, NAME_None, LOCTEXT("TB_Open", "Open"), TAttribute<FText>(), FSlateIcon(EditorStyle, "LevelEditor.OpenLevel"));
+	Toolbar.AddToolBarButton(Commands.SaveScene, NAME_None, LOCTEXT("TB_Save", "Save"), TAttribute<FText>(), FSlateIcon(EditorStyle, "AssetEditor.SaveAsset"));
+	Toolbar.AddToolBarButton(Commands.ImportMesh, NAME_None, LOCTEXT("TB_Import", "Import"), TAttribute<FText>(), FSlateIcon(EditorStyle, "LevelEditor.ImportScene"));
+	Toolbar.EndSection();
+	Toolbar.AddSeparator();
+
+	Toolbar.BeginSection("History");
+	Toolbar.AddToolBarButton(Commands.Undo, NAME_None, TAttribute<FText>(), TAttribute<FText>(this, &SRenderStudioMainFrame::GetUndoLabel), FSlateIcon(EditorStyle, "GenericCommands.Undo"));
+	Toolbar.AddToolBarButton(Commands.Redo, NAME_None, TAttribute<FText>(), TAttribute<FText>(this, &SRenderStudioMainFrame::GetRedoLabel), FSlateIcon(EditorStyle, "GenericCommands.Redo"));
 	Toolbar.EndSection();
 	Toolbar.AddSeparator();
 
@@ -468,6 +639,12 @@ TSharedRef<SWidget> SRenderStudioMainFrame::MakeToolbar()
 	Toolbar.AddToolBarButton(Commands.ToggleEnvironment, NAME_None, LOCTEXT("TB_Sky", "Sky"), TAttribute<FText>(), FSlateIcon(StudioStyle, "RenderStudio.Icon.Sky"));
 	Toolbar.AddToolBarButton(Commands.ToggleTurntable, NAME_None, TAttribute<FText>(), TAttribute<FText>(), FSlateIcon(EditorStyle, "EditorViewport.ToggleRealTime"));
 	Toolbar.AddToolBarButton(Commands.ResetCamera, NAME_None, LOCTEXT("TB_Camera", "Camera"), TAttribute<FText>(), FSlateIcon(EditorStyle, "BlueprintEditor.ResetCamera"));
+	Toolbar.EndSection();
+	Toolbar.AddSeparator();
+
+	Toolbar.BeginSection("Output");
+	Toolbar.AddToolBarButton(Commands.RenderImage, NAME_None, LOCTEXT("TB_Render", "Render"), TAttribute<FText>(), FSlateIcon(StudioStyle, "RenderStudio.Icon.Camera"));
+	Toolbar.AddToolBarButton(Commands.SaveScreenshot, NAME_None, LOCTEXT("TB_Shot", "Screenshot"), TAttribute<FText>(), FSlateIcon(EditorStyle, "HighresScreenshot.Capture"));
 	Toolbar.EndSection();
 	Toolbar.AddSeparator();
 
@@ -543,6 +720,22 @@ void SRenderStudioMainFrame::SetStatus(const FText& Message)
 	StatusText = Message;
 }
 
+void SRenderStudioMainFrame::UpdateTitle()
+{
+	const FText Title = FText::Format(LOCTEXT("WindowTitle", "{0}{1} - Render Studio"),
+		Scene->GetDisplayName(),
+		Scene->IsDirty() ? FText::FromString(TEXT("*")) : FText::GetEmpty());
+
+	if (TSharedPtr<SWindow> Window = OwnerWindow.Pin())
+	{
+		Window->SetTitle(Title);
+	}
+	if (TSharedPtr<SDockTab> Tab = OwnerTab.Pin())
+	{
+		Tab->SetLabel(Title);
+	}
+}
+
 //////////////////////////////////////////////////////////////////////////
 // Commands
 
@@ -552,11 +745,17 @@ void SRenderStudioMainFrame::BindCommands()
 	FUICommandList& List = *CommandList;
 
 	List.MapAction(Commands.NewScene, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnNewScene));
+	List.MapAction(Commands.OpenScene, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnOpenScene));
+	List.MapAction(Commands.SaveScene, FExecuteAction::CreateLambda([this]() { OnSaveScene(); }));
+	List.MapAction(Commands.SaveSceneAs, FExecuteAction::CreateLambda([this]() { OnSaveSceneAs(); }));
 	List.MapAction(Commands.ImportMesh, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnImportMesh));
-	List.MapAction(Commands.SaveAll, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnSaveAll));
+	List.MapAction(Commands.ImportEnvironment, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnImportEnvironment));
+	List.MapAction(Commands.RenderImage, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnRenderImage));
 	List.MapAction(Commands.SaveScreenshot, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnSaveScreenshot));
 	List.MapAction(Commands.Exit, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnExit));
 
+	List.MapAction(Commands.Undo, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnUndo), FCanExecuteAction::CreateLambda([this]() { return Scene->CanUndo(); }));
+	List.MapAction(Commands.Redo, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnRedo), FCanExecuteAction::CreateLambda([this]() { return Scene->CanRedo(); }));
 	List.MapAction(Commands.DuplicateSelected, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnDuplicate), FCanExecuteAction::CreateSP(this, &SRenderStudioMainFrame::HasSelectedObject));
 	List.MapAction(Commands.DeleteSelected, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnDelete), FCanExecuteAction::CreateSP(this, &SRenderStudioMainFrame::HasSelectedObject));
 	List.MapAction(Commands.FocusSelected, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnFocusSelected));
@@ -619,7 +818,21 @@ void SRenderStudioMainFrame::BindCommands()
 	List.MapAction(Commands.ResetCamera, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnResetCamera));
 	List.MapAction(Commands.ResetLayout, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnResetLayout));
 
+	List.MapAction(Commands.ViewPerspective, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnStandardView, ERenderStudioView::Perspective));
+	List.MapAction(Commands.ViewFront, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnStandardView, ERenderStudioView::Front));
+	List.MapAction(Commands.ViewBack, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnStandardView, ERenderStudioView::Back));
+	List.MapAction(Commands.ViewLeft, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnStandardView, ERenderStudioView::Left));
+	List.MapAction(Commands.ViewRight, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnStandardView, ERenderStudioView::Right));
+	List.MapAction(Commands.ViewTop, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnStandardView, ERenderStudioView::Top));
+
+	for (int32 Index = 0; Index < FRenderStudioScene::NumBookmarks; ++Index)
+	{
+		List.MapAction(Commands.SaveBookmark[Index], FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnSaveBookmark, Index));
+		List.MapAction(Commands.RecallBookmark[Index], FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnRecallBookmark, Index), FCanExecuteAction::CreateSP(this, &SRenderStudioMainFrame::HasBookmark, Index));
+	}
+
 	List.MapAction(Commands.NewMaterial, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnNewMaterial));
+	List.MapAction(Commands.NewMaterialGraph, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnNewMaterialGraph));
 	List.MapAction(Commands.NewMaterialInstance, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnNewMaterialInstance), FCanExecuteAction::CreateSP(this, &SRenderStudioMainFrame::HasSelectedMaterial));
 	List.MapAction(Commands.EditMaterial, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnEditMaterial), FCanExecuteAction::CreateSP(this, &SRenderStudioMainFrame::HasSelectedMaterial));
 	List.MapAction(Commands.AssignMaterial, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnAssignMaterial), FCanExecuteAction::CreateSP(this, &SRenderStudioMainFrame::CanAssignMaterial));
@@ -627,16 +840,197 @@ void SRenderStudioMainFrame::BindCommands()
 	List.MapAction(Commands.About, FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnAbout));
 }
 
-void SRenderStudioMainFrame::OnNewScene()
+//////////////////////////////////////////////////////////////////////////
+// Document
+
+const void* SRenderStudioMainFrame::GetParentWindowHandle() const
 {
-	const EAppReturnType::Type Answer = FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("ConfirmNewScene", "Clear the scene and start again from the shader ball?\n\nMaterials you created stay in the library."));
+	return FSlateApplication::Get().FindBestParentWindowHandleForDialogs(ConstCastSharedRef<SRenderStudioMainFrame>(SharedThis(this)));
+}
+
+bool SRenderStudioMainFrame::ConfirmCloseDocument(bool bQuitting)
+{
+	// Materials edited in the node editor are packages of their own: include them in the question.
+	TArray<UPackage*> DirtyPackages;
+	FEditorFileUtils::GetDirtyContentPackages(DirtyPackages);
+
+	if (!Scene->IsDirty() && DirtyPackages.Num() == 0)
+	{
+		return true;
+	}
+
+	const FText Title = LOCTEXT("SaveChangesTitle", "Render Studio");
+	const FText Question = Scene->IsDirty()
+		? FText::Format(LOCTEXT("SaveChangesPrompt", "Save changes to {0}?"), Scene->GetDisplayName())
+		: LOCTEXT("SaveAssetsPrompt", "Save modified materials and imported assets?");
+	const EAppReturnType::Type Answer = FMessageDialog::Open(EAppMsgType::YesNoCancel, Question, &Title);
+
+	if (Answer == EAppReturnType::Cancel)
+	{
+		return false;
+	}
 	if (Answer == EAppReturnType::Yes)
 	{
-		Scene->ResetToDefault();
-		OnResetCamera();
+		if (Scene->IsDirty())
+		{
+			return OnSaveScene();
+		}
+		SaveModifiedAssets();
+		return true;
+	}
+
+	if (bQuitting)
+	{
+		// The editor would otherwise ask a second time while shutting down
+		for (UPackage* Package : DirtyPackages)
+		{
+			Package->SetDirtyFlag(false);
+		}
+	}
+	return true;
+}
+
+void SRenderStudioMainFrame::OnNewScene()
+{
+	if (ConfirmCloseDocument())
+	{
+		Scene->NewScene();
 		SetStatus(LOCTEXT("NewSceneDone", "New scene"));
 	}
 }
+
+void SRenderStudioMainFrame::OnOpenScene()
+{
+	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+	if (!DesktopPlatform || !ConfirmCloseDocument())
+	{
+		return;
+	}
+
+	TArray<FString> Files;
+	const FString& Directory = GetDefault<URenderStudioSettings>()->LastSceneDirectory;
+	if (DesktopPlatform->OpenFileDialog(GetParentWindowHandle(), LOCTEXT("OpenSceneTitle", "Open Scene").ToString(), Directory, TEXT(""),
+		RenderStudioMainFrame::SceneFileTypes, EFileDialogFlags::None, Files) && Files.Num() > 0)
+	{
+		OpenSceneFile(Files[0]);
+	}
+}
+
+bool SRenderStudioMainFrame::OpenSceneFile(const FString& Filename)
+{
+	FText Error;
+	if (!Scene->LoadScene(Filename, Error))
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, Error);
+		SetStatus(Error);
+		return false;
+	}
+
+	GetMutableDefault<URenderStudioSettings>()->AddRecentScene(Filename);
+	SetStatus(FText::Format(LOCTEXT("OpenedScene", "Opened {0}"), FText::FromString(Filename)));
+	return true;
+}
+
+bool SRenderStudioMainFrame::OnSaveScene()
+{
+	if (Scene->GetFilename().IsEmpty())
+	{
+		return OnSaveSceneAs();
+	}
+
+	// Materials, instances and imported assets the scene points at must exist on disk too
+	SaveModifiedAssets();
+
+	if (FRenderStudioViewportClient* Client = GetViewportClient())
+	{
+		Scene->SetSceneCamera(Client->GetCamera());
+	}
+
+	FText Error;
+	if (!Scene->SaveScene(Scene->GetFilename(), Error))
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, Error);
+		SetStatus(Error);
+		return false;
+	}
+
+	GetMutableDefault<URenderStudioSettings>()->AddRecentScene(Scene->GetFilename());
+	SetStatus(FText::Format(LOCTEXT("SavedScene", "Saved {0}"), FText::FromString(Scene->GetFilename())));
+	return true;
+}
+
+bool SRenderStudioMainFrame::OnSaveSceneAs()
+{
+	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+	if (!DesktopPlatform)
+	{
+		return false;
+	}
+
+	const URenderStudioSettings* Settings = GetDefault<URenderStudioSettings>();
+	const FString Directory = Scene->GetFilename().IsEmpty() ? Settings->LastSceneDirectory : FPaths::GetPath(Scene->GetFilename());
+	const FString DefaultName = Scene->GetFilename().IsEmpty() ? FString(TEXT("Scene.rss")) : FPaths::GetCleanFilename(Scene->GetFilename());
+
+	TArray<FString> Files;
+	if (!DesktopPlatform->SaveFileDialog(GetParentWindowHandle(), LOCTEXT("SaveSceneTitle", "Save Scene As").ToString(), Directory, DefaultName,
+		RenderStudioMainFrame::SceneFileTypes, EFileDialogFlags::None, Files) || Files.Num() == 0)
+	{
+		return false;
+	}
+
+	FString Filename = Files[0];
+	if (FPaths::GetExtension(Filename).IsEmpty())
+	{
+		Filename += TEXT(".rss");
+	}
+
+	SaveModifiedAssets();
+	if (FRenderStudioViewportClient* Client = GetViewportClient())
+	{
+		Scene->SetSceneCamera(Client->GetCamera());
+	}
+
+	FText Error;
+	if (!Scene->SaveScene(Filename, Error))
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, Error);
+		SetStatus(Error);
+		return false;
+	}
+
+	GetMutableDefault<URenderStudioSettings>()->AddRecentScene(Filename);
+	SetStatus(FText::Format(LOCTEXT("SavedScene", "Saved {0}"), FText::FromString(Filename)));
+	return true;
+}
+
+void SRenderStudioMainFrame::SaveModifiedAssets()
+{
+	const bool bPromptUserToSave = false;
+	const bool bSaveMapPackages = false;
+	const bool bSaveContentPackages = true;
+	FEditorFileUtils::SaveDirtyPackages(bPromptUserToSave, bSaveMapPackages, bSaveContentPackages);
+}
+
+void SRenderStudioMainFrame::OnSceneLoaded()
+{
+	FRenderStudioViewportClient* Client = GetViewportClient();
+	if (!Client)
+	{
+		return;
+	}
+
+	if (Scene->GetSceneCamera().bIsSet)
+	{
+		Client->SetCamera(Scene->GetSceneCamera());
+	}
+	else
+	{
+		Client->FrameScene(true);
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Import / output
 
 void SRenderStudioMainFrame::OnImportMesh()
 {
@@ -647,9 +1041,8 @@ void SRenderStudioMainFrame::OnImportMesh()
 	}
 
 	TArray<FString> Files;
-	const void* ParentWindowHandle = FSlateApplication::Get().FindBestParentWindowHandleForDialogs(AsShared());
 	const bool bOpened = DesktopPlatform->OpenFileDialog(
-		ParentWindowHandle,
+		GetParentWindowHandle(),
 		LOCTEXT("ImportDialogTitle", "Import Mesh").ToString(),
 		FPaths::GetPath(FPaths::ProjectDir()),
 		TEXT(""),
@@ -665,13 +1058,58 @@ void SRenderStudioMainFrame::OnImportMesh()
 	}
 }
 
-void SRenderStudioMainFrame::OnSaveAll()
+void SRenderStudioMainFrame::OnImportEnvironment()
 {
-	const bool bPromptUserToSave = true;
-	const bool bSaveMapPackages = false;
-	const bool bSaveContentPackages = true;
-	FEditorFileUtils::SaveDirtyPackages(bPromptUserToSave, bSaveMapPackages, bSaveContentPackages);
-	SetStatus(LOCTEXT("Saved", "Saved"));
+	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+	if (!DesktopPlatform)
+	{
+		return;
+	}
+
+	TArray<FString> Files;
+	const bool bOpened = DesktopPlatform->OpenFileDialog(
+		GetParentWindowHandle(),
+		LOCTEXT("ImportHDRITitle", "Import HDRI").ToString(),
+		FPaths::GetPath(FPaths::ProjectDir()),
+		TEXT(""),
+		TEXT("Radiance HDR panorama (*.hdr)|*.hdr"),
+		EFileDialogFlags::Multiple,
+		Files);
+
+	if (bOpened && Files.Num() > 0)
+	{
+		const int32 NumImported = Scene->ImportEnvironmentMaps(Files);
+		SetStatus(NumImported > 0
+			? FText::Format(LOCTEXT("HDRIImported", "Imported {0} HDRI(s); the sky now uses {1}"), FText::AsNumber(NumImported), FText::FromString(FPaths::GetBaseFilename(Files[0])))
+			: LOCTEXT("HDRIImportFailed", "No cubemap could be created from the selected file(s). Use long-lat (equirectangular) .hdr panoramas."));
+	}
+}
+
+void SRenderStudioMainFrame::OnRenderImage()
+{
+	FRenderStudioViewportClient* Client = GetViewportClient();
+	if (!Client)
+	{
+		return;
+	}
+
+	TSharedRef<SWindow> DialogWindow = SNew(SWindow)
+		.Title(LOCTEXT("RenderDialogTitle", "Render"))
+		.SizingRule(ESizingRule::Autosized)
+		.SupportsMaximize(false)
+		.SupportsMinimize(false);
+
+	TSharedRef<SRenderStudioRenderDialog> Dialog = SNew(SRenderStudioRenderDialog, Scene.ToSharedRef(), Client)
+		.ParentWindow(DialogWindow);
+	DialogWindow->SetContent(Dialog);
+
+	FSlateApplication::Get().AddModalWindow(DialogWindow, SharedThis(this));
+
+	const FString Output = Dialog->GetLastOutput();
+	if (!Output.IsEmpty())
+	{
+		SetStatus(FText::Format(LOCTEXT("RenderDone", "Rendered {0}"), FText::FromString(Output)));
+	}
 }
 
 void SRenderStudioMainFrame::OnSaveScreenshot()
@@ -688,8 +1126,7 @@ void SRenderStudioMainFrame::OnSaveScreenshot()
 	const FString DefaultName = FString::Printf(TEXT("RenderStudio_%s.png"), *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
 
 	TArray<FString> Files;
-	const void* ParentWindowHandle = FSlateApplication::Get().FindBestParentWindowHandleForDialogs(AsShared());
-	if (!DesktopPlatform->SaveFileDialog(ParentWindowHandle, LOCTEXT("ScreenshotDialogTitle", "Save Screenshot").ToString(), Directory, DefaultName, TEXT("PNG image (*.png)|*.png"), EFileDialogFlags::None, Files) || Files.Num() == 0)
+	if (!DesktopPlatform->SaveFileDialog(GetParentWindowHandle(), LOCTEXT("ScreenshotDialogTitle", "Save Screenshot").ToString(), Directory, DefaultName, TEXT("PNG image (*.png)|*.png"), EFileDialogFlags::None, Files) || Files.Num() == 0)
 	{
 		return;
 	}
@@ -702,6 +1139,11 @@ void SRenderStudioMainFrame::OnSaveScreenshot()
 
 void SRenderStudioMainFrame::OnExit()
 {
+	if (!ConfirmCloseDocument(OnExitRequested.IsBound()))
+	{
+		return;
+	}
+
 	if (OnExitRequested.IsBound())
 	{
 		OnExitRequested.Execute();
@@ -710,6 +1152,33 @@ void SRenderStudioMainFrame::OnExit()
 	{
 		Tab->RequestCloseTab();
 	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Edit
+
+void SRenderStudioMainFrame::OnUndo()
+{
+	const FText Description = Scene->GetUndoDescription();
+	Scene->Undo();
+	SetStatus(FText::Format(LOCTEXT("Undone", "Undo: {0}"), Description));
+}
+
+void SRenderStudioMainFrame::OnRedo()
+{
+	const FText Description = Scene->GetRedoDescription();
+	Scene->Redo();
+	SetStatus(FText::Format(LOCTEXT("Redone", "Redo: {0}"), Description));
+}
+
+FText SRenderStudioMainFrame::GetUndoLabel() const
+{
+	return Scene->CanUndo() ? FText::Format(LOCTEXT("UndoLabel", "Undo {0}"), Scene->GetUndoDescription()) : LOCTEXT("UndoLabelEmpty", "Undo");
+}
+
+FText SRenderStudioMainFrame::GetRedoLabel() const
+{
+	return Scene->CanRedo() ? FText::Format(LOCTEXT("RedoLabel", "Redo {0}"), Scene->GetRedoDescription()) : LOCTEXT("RedoLabelEmpty", "Redo");
 }
 
 void SRenderStudioMainFrame::OnDuplicate()
@@ -730,6 +1199,9 @@ void SRenderStudioMainFrame::OnDelete()
 	}
 }
 
+//////////////////////////////////////////////////////////////////////////
+// Camera
+
 void SRenderStudioMainFrame::OnFocusSelected()
 {
 	if (FRenderStudioViewportClient* Client = GetViewportClient())
@@ -746,6 +1218,38 @@ void SRenderStudioMainFrame::OnResetCamera()
 	}
 }
 
+void SRenderStudioMainFrame::OnStandardView(ERenderStudioView View)
+{
+	if (FRenderStudioViewportClient* Client = GetViewportClient())
+	{
+		Client->SetStandardView(View);
+	}
+}
+
+void SRenderStudioMainFrame::OnSaveBookmark(int32 Index)
+{
+	if (FRenderStudioViewportClient* Client = GetViewportClient())
+	{
+		Scene->SetBookmark(Index, Client->GetCamera());
+		SetStatus(FText::Format(LOCTEXT("BookmarkStored", "Camera {0} stored (press {0} to jump back)"), FText::AsNumber(Index + 1)));
+	}
+}
+
+void SRenderStudioMainFrame::OnRecallBookmark(int32 Index)
+{
+	FRenderStudioViewportClient* Client = GetViewportClient();
+	if (Client && HasBookmark(Index))
+	{
+		Client->SetCamera(Scene->GetBookmark(Index));
+		SetStatus(FText::Format(LOCTEXT("BookmarkRecalled", "Camera {0}"), FText::AsNumber(Index + 1)));
+	}
+}
+
+bool SRenderStudioMainFrame::HasBookmark(int32 Index) const
+{
+	return Scene->GetBookmark(Index).bIsSet;
+}
+
 void SRenderStudioMainFrame::OnResetLayout()
 {
 	TabManager->CloseAllAreas();
@@ -753,10 +1257,41 @@ void SRenderStudioMainFrame::OnResetLayout()
 	SetStatus(LOCTEXT("LayoutReset", "Layout reset"));
 }
 
+//////////////////////////////////////////////////////////////////////////
+// Materials
+
+void SRenderStudioMainFrame::AssignToSelection(UMaterialInterface* Material)
+{
+	if (!Material)
+	{
+		return;
+	}
+
+	if (AActor* Actor = Scene->GetSelectedObject())
+	{
+		Scene->AssignMaterial(Actor, Material);
+	}
+	Scene->SetSelectedMaterial(Material);
+}
+
 void SRenderStudioMainFrame::OnNewMaterial()
 {
-	// New materials come as a base graph + an instance: the instance gives live slider
-	// feedback, the base graph is what "Node Editor" opens.
+	// New materials are instances of the shared Render Studio PBR material: live slider feedback,
+	// no shader compile per material. "New Material Graph" gives a material its own node graph.
+	UMaterial* Master = Scene->GetOrCreateMasterMaterial();
+	UMaterialInstanceConstant* Instance = Master ? Scene->CreateMaterialInstance(Master, TEXT("Material")) : nullptr;
+	if (!Instance)
+	{
+		SetStatus(LOCTEXT("NewMaterialFailed", "Could not create the material (is the content folder writable?)"));
+		return;
+	}
+
+	AssignToSelection(Instance);
+	SetStatus(FText::Format(LOCTEXT("NewMaterialDone", "Created {0}"), FText::FromString(Instance->GetName())));
+}
+
+void SRenderStudioMainFrame::OnNewMaterialGraph()
+{
 	UMaterial* BaseMaterial = Scene->CreateMaterial();
 	if (!BaseMaterial)
 	{
@@ -770,13 +1305,35 @@ void SRenderStudioMainFrame::OnNewMaterial()
 		ToAssign = Instance;
 	}
 
-	if (AActor* Actor = Scene->GetSelectedObject())
-	{
-		Scene->AssignMaterial(Actor, ToAssign);
-	}
-	Scene->SetSelectedMaterial(ToAssign);
+	AssignToSelection(ToAssign);
+	SetStatus(FText::Format(LOCTEXT("NewMaterialGraphDone", "Created {0} with its own graph ({1})"), FText::FromString(ToAssign->GetName()), FText::FromString(BaseMaterial->GetName())));
+}
 
-	SetStatus(FText::Format(LOCTEXT("NewMaterialDone", "Created {0}"), FText::FromString(ToAssign->GetName())));
+void SRenderStudioMainFrame::OnNewMaterialFromPreset(int32 PresetIndex)
+{
+	const TArray<FRenderStudioMaterialPreset>& Presets = FRenderStudioScene::GetMaterialPresets();
+	if (!Presets.IsValidIndex(PresetIndex))
+	{
+		return;
+	}
+
+	if (UMaterialInstanceConstant* Instance = Scene->CreateMaterialFromPreset(Presets[PresetIndex]))
+	{
+		AssignToSelection(Instance);
+		SetStatus(FText::Format(LOCTEXT("PresetMaterialDone", "Created {0}"), FText::FromString(Instance->GetName())));
+	}
+}
+
+void SRenderStudioMainFrame::OnApplyPreset(int32 PresetIndex)
+{
+	const TArray<FRenderStudioMaterialPreset>& Presets = FRenderStudioScene::GetMaterialPresets();
+	UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(Scene->GetSelectedMaterial());
+	if (Instance && Presets.IsValidIndex(PresetIndex))
+	{
+		Scene->ApplyPreset(Instance, Presets[PresetIndex]);
+		Scene->MarkDirty();
+		SetStatus(FText::Format(LOCTEXT("PresetApplied", "Applied {0} to {1}"), FText::FromString(Presets[PresetIndex].Name), FText::FromString(Instance->GetName())));
+	}
 }
 
 void SRenderStudioMainFrame::OnNewMaterialInstance()
@@ -798,7 +1355,13 @@ void SRenderStudioMainFrame::OnEditMaterial()
 	// Always open the node graph of the base material, which is what artists expect from "edit"
 	UMaterial* BaseMaterial = Material->GetMaterial();
 	Scene->OpenMaterialEditor(BaseMaterial ? static_cast<UMaterialInterface*>(BaseMaterial) : Material);
-	SetStatus(FText::Format(LOCTEXT("EditMaterialDone", "Opened {0} in the material editor (press Apply there to see changes here)"), FText::FromString(BaseMaterial ? BaseMaterial->GetName() : Material->GetName())));
+
+	FText Hint = LOCTEXT("EditMaterialHint", "press Apply there to see changes here");
+	if (BaseMaterial && BaseMaterial->GetName() == TEXT("M_StudioPBR"))
+	{
+		Hint = LOCTEXT("EditSharedMaterialHint", "this graph is shared by every Render Studio material; use New Material Graph for a private one");
+	}
+	SetStatus(FText::Format(LOCTEXT("EditMaterialDone", "Opened {0} in the material editor ({1})"), FText::FromString(BaseMaterial ? BaseMaterial->GetName() : Material->GetName()), Hint));
 }
 
 void SRenderStudioMainFrame::OnAssignMaterial()
@@ -809,13 +1372,33 @@ void SRenderStudioMainFrame::OnAssignMaterial()
 		FText::FromString(Scene->GetObjectLabel(Scene->GetSelectedObject()))));
 }
 
+//////////////////////////////////////////////////////////////////////////
+// Help
+
+void SRenderStudioMainFrame::OnShowControls()
+{
+	const FText Title = LOCTEXT("ControlsTitle", "Render Studio Controls");
+	FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("ControlsText",
+		"Viewport\n"
+		"  Left mouse: orbit    Middle mouse: pan    Right mouse / wheel: zoom\n"
+		"  Click: select    F: frame selection    Home: frame scene\n"
+		"  Q / W / E / R: select / move / rotate / scale\n"
+		"  L + drag: move the sun    K + drag: spin the sky\n"
+		"  Numpad 0 / 1 / 3 / 7: perspective / front / right / top\n"
+		"  Ctrl+1..4: store camera    1..4: recall camera\n\n"
+		"Drag a material from the Materials panel onto an object to assign it.\n"
+		"Drop .fbx / .obj files on the viewport to import them, .hdr files to use them as the sky.\n\n"
+		"Ctrl+Z / Ctrl+Y: undo / redo    Ctrl+S: save    F9: render    F12: screenshot"),
+		&Title);
+}
+
 void SRenderStudioMainFrame::OnAbout()
 {
+	const FText Title = LOCTEXT("AboutTitle", "About Render Studio");
 	FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("AboutText",
-		"Render Studio 0.1\n\n"
-		"A look-dev and presentation tool built on the Unreal Engine 4.27 renderer and material editor.\n\n"
-		"Navigation: LMB orbit, MMB pan, RMB / wheel zoom, F frame selection.\n"
-		"Hold L and drag to move the sun, K and drag to spin the sky."));
+		"Render Studio 0.2\n\n"
+		"A look-dev and presentation tool built on the Unreal Engine 4.27 renderer and material editor."),
+		&Title);
 }
 
 bool SRenderStudioMainFrame::HasSelectedObject() const
@@ -826,6 +1409,12 @@ bool SRenderStudioMainFrame::HasSelectedObject() const
 bool SRenderStudioMainFrame::HasSelectedMaterial() const
 {
 	return Scene->GetSelectedMaterial() != nullptr;
+}
+
+bool SRenderStudioMainFrame::HasSelectedInstance() const
+{
+	UMaterialInterface* Material = Scene->GetSelectedMaterial();
+	return Material && Material->IsA<UMaterialInstanceConstant>() && Material->GetPathName().StartsWith(TEXT("/Game/"));
 }
 
 bool SRenderStudioMainFrame::CanAssignMaterial() const

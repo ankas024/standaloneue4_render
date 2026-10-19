@@ -1,17 +1,64 @@
 #include "RenderStudioViewportClient.h"
 
 #include "AdvancedPreviewScene.h"
+#include "CanvasTypes.h"
+#include "EngineModule.h"
 #include "EngineUtils.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "HighResScreenshot.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
+#include "LegacyScreenPercentageDriver.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
-#include "RenderStudioScene.h"
+#include "RendererInterface.h"
+#include "RenderingThread.h"
 #include "RenderStudioSettings.h"
+#include "SceneView.h"
 #include "SRenderStudioViewport.h"
 #include "UnrealWidget.h"
+
+#define LOCTEXT_NAMESPACE "RenderStudioViewportClient"
+
+namespace RenderStudioViewportClient
+{
+	static const FRotator HeroRotation(-18.0f, -34.0f, 0.0f);
+	static const int32 MaxRenderSize = 16384;
+
+	static FBox GetFramingBounds(const FRenderStudioScene& Scene, bool bSelectionOnly)
+	{
+		FBox Bounds = Scene.GetBounds(bSelectionOnly);
+		if (!Bounds.IsValid)
+		{
+			Bounds = FBox(FVector(-100.0f, -100.0f, 0.0f), FVector(100.0f, 100.0f, 150.0f));
+		}
+		return Bounds;
+	}
+
+	/** Box filter in linear space, so supersampled edges keep their brightness. */
+	static void Downsample(const TArray<FColor>& Source, int32 SourceWidth, int32 Factor, int32 Width, int32 Height, TArray<FColor>& Out)
+	{
+		Out.SetNumUninitialized(Width * Height);
+		const float Weight = 1.0f / (Factor * Factor);
+		for (int32 Y = 0; Y < Height; ++Y)
+		{
+			for (int32 X = 0; X < Width; ++X)
+			{
+				FLinearColor Sum = FLinearColor::Transparent;
+				for (int32 SubY = 0; SubY < Factor; ++SubY)
+				{
+					const FColor* Row = &Source[(Y * Factor + SubY) * SourceWidth + X * Factor];
+					for (int32 SubX = 0; SubX < Factor; ++SubX)
+					{
+						Sum += FLinearColor(Row[SubX]);
+					}
+				}
+				Out[Y * Width + X] = (Sum * Weight).ToFColor(true);
+			}
+		}
+	}
+}
 
 FRenderStudioViewportClient::FRenderStudioViewportClient(const TSharedRef<FRenderStudioScene>& InScene, const TSharedRef<SRenderStudioViewport>& InViewportWidget)
 	: FEditorViewportClient(nullptr, &InScene->GetPreviewScene().Get(), StaticCastSharedRef<SEditorViewport>(InViewportWidget))
@@ -42,7 +89,7 @@ FRenderStudioViewportClient::FRenderStudioViewportClient(const TSharedRef<FRende
 
 	// Three-quarter hero angle; FrameScene() then pulls the camera back along it.
 	SetViewLocation(FVector(-320.0f, 220.0f, 200.0f));
-	SetViewRotation(FRotator(-18.0f, -34.0f, 0.0f));
+	SetViewRotation(RenderStudioViewportClient::HeroRotation);
 }
 
 void FRenderStudioViewportClient::Tick(float DeltaSeconds)
@@ -143,10 +190,23 @@ void FRenderStudioViewportClient::TrackingStarted(const FInputEventState& InInpu
 {
 	TSharedPtr<FRenderStudioScene> Scene = SceneWeak.Pin();
 	bManipulating = bIsDraggingWidget && Scene.IsValid() && Scene->GetSelectedObject() != nullptr;
+
+	if (bManipulating)
+	{
+		// One undo step per gizmo drag
+		Scene->BeginChange(LOCTEXT("TransformObject", "Transform"));
+	}
 }
 
 void FRenderStudioViewportClient::TrackingStopped()
 {
+	if (bManipulating)
+	{
+		if (TSharedPtr<FRenderStudioScene> Scene = SceneWeak.Pin())
+		{
+			Scene->EndChange();
+		}
+	}
 	bManipulating = false;
 }
 
@@ -186,41 +246,96 @@ bool FRenderStudioViewportClient::ShouldOrbitCamera() const
 	return true;
 }
 
+//////////////////////////////////////////////////////////////////////////
+// Camera
+
 void FRenderStudioViewportClient::FrameSelection(bool bInstant)
 {
-	TSharedPtr<FRenderStudioScene> Scene = SceneWeak.Pin();
-	if (!Scene.IsValid())
+	if (TSharedPtr<FRenderStudioScene> Scene = SceneWeak.Pin())
 	{
-		return;
+		FocusViewportOnBox(RenderStudioViewportClient::GetFramingBounds(*Scene, true), bInstant);
+		Invalidate();
 	}
-
-	FBox Bounds = Scene->GetBounds(true);
-	if (!Bounds.IsValid)
-	{
-		Bounds = FBox(FVector(-100.0f, -100.0f, 0.0f), FVector(100.0f, 100.0f, 150.0f));
-	}
-	FocusViewportOnBox(Bounds, bInstant);
-	Invalidate();
 }
 
 void FRenderStudioViewportClient::FrameScene(bool bInstant)
 {
+	SetStandardView(ERenderStudioView::Perspective);
+}
+
+void FRenderStudioViewportClient::SetStandardView(ERenderStudioView View)
+{
 	TSharedPtr<FRenderStudioScene> Scene = SceneWeak.Pin();
 	if (!Scene.IsValid())
 	{
 		return;
 	}
 
-	SetViewRotation(FRotator(-18.0f, -34.0f, 0.0f));
-
-	FBox Bounds = Scene->GetBounds(false);
-	if (!Bounds.IsValid)
+	FRotator Rotation = RenderStudioViewportClient::HeroRotation;
+	switch (View)
 	{
-		Bounds = FBox(FVector(-100.0f, -100.0f, 0.0f), FVector(100.0f, 100.0f, 150.0f));
+	case ERenderStudioView::Front:	Rotation = FRotator(0.0f, 0.0f, 0.0f); break;
+	case ERenderStudioView::Back:	Rotation = FRotator(0.0f, 180.0f, 0.0f); break;
+	case ERenderStudioView::Left:	Rotation = FRotator(0.0f, 90.0f, 0.0f); break;
+	case ERenderStudioView::Right:	Rotation = FRotator(0.0f, -90.0f, 0.0f); break;
+	case ERenderStudioView::Top:	Rotation = FRotator(-89.9f, 0.0f, 0.0f); break;
+	default: break;
 	}
-	FocusViewportOnBox(Bounds, bInstant);
+
+	SetViewRotation(Rotation);
+	FocusViewportOnBox(RenderStudioViewportClient::GetFramingBounds(*Scene, false), true);
 	Invalidate();
 }
+
+FRenderStudioCamera FRenderStudioViewportClient::GetCamera() const
+{
+	FRenderStudioCamera Camera;
+	Camera.Location = GetViewLocation();
+	Camera.Rotation = GetViewRotation();
+	Camera.FieldOfView = GetDefault<URenderStudioSettings>()->FieldOfView;
+	Camera.bIsSet = true;
+	return Camera;
+}
+
+void FRenderStudioViewportClient::SetCamera(const FRenderStudioCamera& Camera)
+{
+	if (!Camera.bIsSet)
+	{
+		return;
+	}
+
+	SetViewLocation(Camera.Location);
+	SetViewRotation(Camera.Rotation);
+
+	// Re-centre the orbit pivot in front of the camera so orbiting keeps working naturally
+	const float PivotDistance = 300.0f;
+	SetLookAtLocation(Camera.Location + Camera.Rotation.Vector() * PivotDistance);
+
+	URenderStudioSettings* Settings = GetMutableDefault<URenderStudioSettings>();
+	Settings->FieldOfView = Camera.FieldOfView;
+	ViewFOV = Camera.FieldOfView;
+	Invalidate();
+}
+
+AActor* FRenderStudioViewportClient::GetObjectAt(int32 X, int32 Y)
+{
+	TSharedPtr<FRenderStudioScene> Scene = SceneWeak.Pin();
+	if (!Viewport || !Scene.IsValid())
+	{
+		return nullptr;
+	}
+
+	HHitProxy* HitProxy = Viewport->GetHitProxy(X, Y);
+	if (HitProxy && HitProxy->IsA(HActor::StaticGetType()))
+	{
+		AActor* Actor = static_cast<HActor*>(HitProxy)->Actor;
+		return Scene->IsSceneObject(Actor) ? Actor : nullptr;
+	}
+	return nullptr;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Output
 
 FString FRenderStudioViewportClient::SaveScreenshot(const FString& InFilename)
 {
@@ -261,22 +376,161 @@ FString FRenderStudioViewportClient::SaveScreenshot(const FString& InFilename)
 		return FString();
 	}
 
-	for (FColor& Pixel : Pixels)
+	return SaveImage(Filename, Pixels, Size.X, Size.Y) ? Filename : FString();
+}
+
+bool FRenderStudioViewportClient::RenderImage(const FRenderStudioRenderSettings& Settings, TArray<FColor>& OutPixels)
+{
+	return RenderImage(Settings, GetCamera(), OutPixels);
+}
+
+bool FRenderStudioViewportClient::RenderImage(const FRenderStudioRenderSettings& Settings, const FRenderStudioCamera& Camera, TArray<FColor>& OutPixels)
+{
+	UWorld* World = GetWorld();
+	if (!World || !World->Scene || Settings.Width <= 0 || Settings.Height <= 0)
+	{
+		return false;
+	}
+
+	const int32 Factor = FMath::Clamp(Settings.Supersampling, 1, 4);
+	const int32 RenderWidth = Settings.Width * Factor;
+	const int32 RenderHeight = Settings.Height * Factor;
+	if (RenderWidth > RenderStudioViewportClient::MaxRenderSize || RenderHeight > RenderStudioViewportClient::MaxRenderSize)
+	{
+		return false;
+	}
+
+	// 8-bit, non-sRGB target: the tonemapper already writes display-encoded values.
+	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>(GetTransientPackage());
+	RenderTarget->RenderTargetFormat = RTF_RGBA8;
+	RenderTarget->ClearColor = FLinearColor::Black;
+	RenderTarget->InitAutoFormat(RenderWidth, RenderHeight);
+	RenderTarget->UpdateResourceImmediate(true);
+	FTextureRenderTargetResource* Resource = RenderTarget->GameThread_GetRenderTargetResource();
+
+	// A dedicated view state lets temporal AA (and SSR / AO history) accumulate over the samples.
+	FSceneViewStateReference ViewState;
+	ViewState.Allocate();
+
+	FEngineShowFlags ShowFlags = EngineShowFlags;
+	ShowFlags.SetSelectionOutline(false);
+	ShowFlags.SetSelection(false);
+	ShowFlags.SetCompositeEditorPrimitives(false);
+	ShowFlags.SetBillboardSprites(false);
+	ShowFlags.SetGrid(false);
+	ShowFlags.SetModeWidgets(false);
+	ShowFlags.SetLightRadius(false);
+	ShowFlags.SetMotionBlur(false);
+	ShowFlags.SetScreenPercentage(false);
+
+	const float HalfFOVRadians = FMath::DegreesToRadians(FMath::Clamp(Camera.FieldOfView, 5.0f, 170.0f)) * 0.5f;
+	const FMatrix ViewRotationMatrix = FInverseRotationMatrix(Camera.Rotation) * FMatrix(
+		FPlane(0, 0, 1, 0),
+		FPlane(1, 0, 0, 0),
+		FPlane(0, 1, 0, 0),
+		FPlane(0, 0, 0, 1));
+	// Horizontal field of view is preserved, like the viewport
+	const FMatrix ProjectionMatrix = FReversedZPerspectiveMatrix(HalfFOVRadians, HalfFOVRadians, 1.0f, RenderWidth / (float)RenderHeight, GetNearClipPlane(), GetNearClipPlane());
+
+	const int32 NumSamples = FMath::Clamp(Settings.Samples, 1, 64);
+	const float FrameTime = 1.0f / 30.0f;
+	float Time = World->GetTimeSeconds();
+
+	for (int32 Sample = 0; Sample < NumSamples; ++Sample)
+	{
+		FCanvas Canvas(Resource, nullptr, World, World->FeatureLevel);
+
+		FSceneViewFamilyContext ViewFamily(FSceneViewFamily::ConstructionValues(Resource, World->Scene, ShowFlags)
+			.SetWorldTimes(Time, FrameTime, Time)
+			.SetRealtimeUpdate(true));
+		ViewFamily.ViewMode = GetViewMode();
+		EngineShowFlagOverride(ESFIM_Editor, ViewFamily.ViewMode, ViewFamily.EngineShowFlags, false);
+		ViewFamily.ExposureSettings = ExposureSettings;
+		ViewFamily.SetScreenPercentageInterface(new FLegacyScreenPercentageDriver(ViewFamily, 1.0f, false));
+
+		FSceneViewInitOptions ViewInitOptions;
+		ViewInitOptions.ViewFamily = &ViewFamily;
+		ViewInitOptions.SetViewRectangle(FIntRect(0, 0, RenderWidth, RenderHeight));
+		ViewInitOptions.ViewOrigin = Camera.Location;
+		ViewInitOptions.ViewRotationMatrix = ViewRotationMatrix;
+		ViewInitOptions.ProjectionMatrix = ProjectionMatrix;
+		ViewInitOptions.SceneViewStateInterface = ViewState.GetReference();
+		ViewInitOptions.BackgroundColor = FLinearColor::Black;
+		ViewInitOptions.FOV = Camera.FieldOfView;
+
+		FSceneView* View = new FSceneView(ViewInitOptions);
+		View->ViewLocation = Camera.Location;
+		View->ViewRotation = Camera.Rotation;
+		View->bCameraCut = (Sample == 0);
+		ViewFamily.Views.Add(View);
+
+		View->StartFinalPostprocessSettings(Camera.Location);
+		View->EndFinalPostprocessSettings(ViewInitOptions);
+
+		GetRendererModule().BeginRenderingViewFamily(&Canvas, &ViewFamily);
+		Time += FrameTime;
+	}
+
+	FlushRenderingCommands();
+
+	TArray<FColor> Pixels;
+	FReadSurfaceDataFlags ReadFlags(RCM_UNorm, CubeFace_MAX);
+	ReadFlags.SetLinearToGamma(false);
+	const bool bRead = Resource->ReadPixels(Pixels, ReadFlags) && Pixels.Num() == RenderWidth * RenderHeight;
+
+	ViewState.Destroy();
+	RenderTarget->ReleaseResource();
+	RenderTarget->MarkPendingKill();
+
+	if (!bRead)
+	{
+		return false;
+	}
+
+	if (Factor > 1)
+	{
+		RenderStudioViewportClient::Downsample(Pixels, RenderWidth, Factor, Settings.Width, Settings.Height, OutPixels);
+	}
+	else
+	{
+		OutPixels = MoveTemp(Pixels);
+	}
+
+	for (FColor& Pixel : OutPixels)
 	{
 		Pixel.A = 255;
 	}
+	return true;
+}
+
+bool FRenderStudioViewportClient::SaveImage(const FString& Filename, const TArray<FColor>& Pixels, int32 Width, int32 Height)
+{
+	if (Pixels.Num() != Width * Height)
+	{
+		return false;
+	}
+
+	const FString Extension = FPaths::GetExtension(Filename).ToLower();
+	EImageFormat Format = EImageFormat::PNG;
+	if (Extension == TEXT("jpg") || Extension == TEXT("jpeg"))
+	{
+		Format = EImageFormat::JPEG;
+	}
+	else if (Extension == TEXT("bmp"))
+	{
+		Format = EImageFormat::BMP;
+	}
 
 	IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
-	TSharedPtr<IImageWrapper> PngWriter = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
-	if (!PngWriter.IsValid() || !PngWriter->SetRaw(Pixels.GetData(), Pixels.Num() * sizeof(FColor), Size.X, Size.Y, ERGBFormat::BGRA, 8))
+	TSharedPtr<IImageWrapper> Writer = ImageWrapperModule.CreateImageWrapper(Format);
+	if (!Writer.IsValid() || !Writer->SetRaw(Pixels.GetData(), Pixels.Num() * sizeof(FColor), Width, Height, ERGBFormat::BGRA, 8))
 	{
-		return FString();
+		return false;
 	}
 
-	const TArray64<uint8>& Compressed = PngWriter->GetCompressed();
-	if (!FFileHelper::SaveArrayToFile(Compressed, *Filename))
-	{
-		return FString();
-	}
-	return Filename;
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Filename), true);
+	const TArray64<uint8>& Compressed = Writer->GetCompressed(Format == EImageFormat::JPEG ? 95 : 0);
+	return FFileHelper::SaveArrayToFile(Compressed, *Filename);
 }
+
+#undef LOCTEXT_NAMESPACE

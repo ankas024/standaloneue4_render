@@ -50,6 +50,7 @@ private:
 	void OnObjectSelectionChanged();
 	void RebuildParameters();
 	TSharedRef<SWidget> MakeParameterWidget(const FParameter& Parameter);
+	TSharedRef<SWidget> MakePresetButton();
 
 	TSharedRef<ITableRow> OnGenerateRow(FItem Item, const TSharedRef<STableViewBase>& OwnerTable);
 	void OnListSelectionChanged(FItem Item, ESelectInfo::Type SelectInfo);

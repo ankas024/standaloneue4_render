@@ -3,17 +3,19 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleInterface.h"
 
-class SDockTab;
-class SWindow;
 class FSpawnTabArgs;
+class SDockTab;
+class SRenderStudioMainFrame;
+class SWindow;
 
 /**
- * Registers the Render Studio application tab.
+ * Starts Render Studio.
  *
  * Two ways to run it:
- *  - inside the editor: Window > Render Studio
- *  - as a standalone app: launch the editor with -RenderStudio. The level editor window is
- *    hidden, Render Studio opens in its own window and closing it quits the process.
+ *  - as the standalone application (RenderStudio.exe, or any editor build started with
+ *    -RenderStudio): the level editor never appears, Render Studio opens in its own top-level
+ *    window and closing that window quits the process.
+ *  - inside the regular editor while developing the plugin: Window > Render Studio.
  */
 class FRenderStudioModule : public IModuleInterface
 {
@@ -23,17 +25,18 @@ public:
 
 	static const FName AppTabId;
 
-	/** True when started with -RenderStudio (application mode). */
+	/** True for the standalone application. */
 	static bool IsAppMode();
-
-	/** Opens (or focuses) the Render Studio window. */
-	static void OpenRenderStudio();
 
 private:
 	TSharedRef<SDockTab> SpawnAppTab(const FSpawnTabArgs& Args);
 	void OnMainFrameCreated(TSharedPtr<SWindow> RootWindow, bool bIsNewProjectWindow);
-	void OnAppTabClosed(TSharedRef<SDockTab> Tab);
+	void OpenAppWindow();
+	void OnAppWindowCloseRequested(const TSharedRef<SWindow>& Window);
+	void OnExitRequested();
 	void RequestQuit();
 
 	FDelegateHandle MainFrameCreatedHandle;
+	TSharedPtr<SWindow> AppWindow;
+	TSharedPtr<SRenderStudioMainFrame> AppMainFrame;
 };

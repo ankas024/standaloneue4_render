@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/SCompoundWidget.h"
 
 /** A titled panel with the glossy gradient header used by every Render Studio pane. */

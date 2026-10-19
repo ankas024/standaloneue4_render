@@ -13,3 +13,4 @@ Build/
 *.xcworkspace
 Plugins/*/Binaries/
 Plugins/*/Intermediate/
+__pycache__/

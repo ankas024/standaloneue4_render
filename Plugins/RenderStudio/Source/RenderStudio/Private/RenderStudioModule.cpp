@@ -1,5 +1,6 @@
 #include "RenderStudioModule.h"
 
+#include "Classes/EditorStyleSettings.h"
 #include "Editor.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
@@ -73,6 +74,9 @@ void FRenderStudioModule::OnMainFrameCreated(TSharedPtr<SWindow> RootWindow, boo
 	{
 		return;
 	}
+
+	// The main window is about to be hidden, so the UE4 material editor must open in its own window.
+	GetMutableDefault<UEditorStyleSettings>()->AssetEditorOpenLocation = EAssetEditorOpenLocation::NewWindow;
 
 	OpenRenderStudio();
 

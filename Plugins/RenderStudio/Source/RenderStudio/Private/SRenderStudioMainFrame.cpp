@@ -1,6 +1,7 @@
 #include "SRenderStudioMainFrame.h"
 
 #include "Components/MeshComponent.h"
+#include "Containers/Ticker.h"
 #include "DesktopPlatformModule.h"
 #include "DynamicRHI.h"
 #include "EditorStyleSet.h"
@@ -25,6 +26,7 @@
 #include "PropertyEditorModule.h"
 #include "RenderStudioCommands.h"
 #include "RenderStudioScene.h"
+#include "RenderStudioSelfTest.h"
 #include "RenderStudioSettings.h"
 #include "RenderStudioStyle.h"
 #include "RenderStudioViewportClient.h"
@@ -186,6 +188,12 @@ void SRenderStudioMainFrame::Construct(const FArguments& InArgs, const TSharedRe
 	if (FParse::Value(FCommandLine::Get(), TEXT("Scene="), StartupScene) && !StartupScene.IsEmpty())
 	{
 		OpenSceneFile(StartupScene);
+	}
+
+	// RenderStudio.exe -RenderStudioSelfTest: run the self test once the UI is up, then quit
+	if (FParse::Param(FCommandLine::Get(), TEXT("RenderStudioSelfTest")))
+	{
+		FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateSP(this, &SRenderStudioMainFrame::OnSelfTestTick), 5.0f);
 	}
 }
 
@@ -592,6 +600,9 @@ void SRenderStudioMainFrame::FillHelpMenu(FMenuBuilder& MenuBuilder)
 {
 	MenuBuilder.AddMenuEntry(LOCTEXT("Controls", "Controls..."), LOCTEXT("ControlsTooltip", "Mouse and keyboard reference."), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnShowControls)));
+	MenuBuilder.AddMenuEntry(LOCTEXT("SelfTest", "Run Self Test"), LOCTEXT("SelfTestTooltip", "Check that scenes, undo, materials, saving and rendering work on this machine. Replaces the current scene."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SRenderStudioMainFrame::OnRunSelfTest)));
+	MenuBuilder.AddMenuSeparator();
 	MenuBuilder.AddMenuEntry(FRenderStudioCommands::Get().About);
 }
 
@@ -1391,6 +1402,48 @@ void SRenderStudioMainFrame::OnShowControls()
 		"Drop .fbx / .obj files on the viewport to import them, .hdr files to use them as the sky.\n\n"
 		"Ctrl+Z / Ctrl+Y: undo / redo    Ctrl+S: save    F9: render    F12: screenshot"),
 		&Title);
+}
+
+void SRenderStudioMainFrame::OnRunSelfTest()
+{
+	FRenderStudioViewportClient* Client = GetViewportClient();
+	if (!Client || !ConfirmCloseDocument())
+	{
+		return;
+	}
+
+	const FString OutputDirectory = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("SelfTest"));
+	TArray<FString> Report;
+	const bool bPassed = RenderStudioSelfTest::Run(*Scene, *Client, OutputDirectory, Report);
+
+	const FText Title = LOCTEXT("SelfTestTitle", "Render Studio Self Test");
+	FMessageDialog::Open(EAppMsgType::Ok, FText::Format(LOCTEXT("SelfTestResult", "{0}\n\n{1}\n\nImages and log: {2}"),
+		bPassed ? LOCTEXT("SelfTestPassed", "All checks passed.") : LOCTEXT("SelfTestFailed", "Some checks failed:"),
+		FText::FromString(FString::Join(Report, TEXT("\n"))),
+		FText::FromString(OutputDirectory)), &Title);
+	SetStatus(bPassed ? LOCTEXT("SelfTestPassedStatus", "Self test passed") : LOCTEXT("SelfTestFailedStatus", "Self test failed - see the report"));
+}
+
+bool SRenderStudioMainFrame::OnSelfTestTick(float DeltaTime)
+{
+	FRenderStudioViewportClient* Client = GetViewportClient();
+	if (!Client)
+	{
+		return true; // viewport not spawned yet, try again next tick
+	}
+
+	TArray<FString> Report;
+	RenderStudioSelfTest::Run(*Scene, *Client, FPaths::ProjectSavedDir() / TEXT("SelfTest"), Report);
+
+	// Leave nothing unsaved so quitting does not prompt
+	SaveModifiedAssets();
+	FText Error;
+	if (!Scene->GetFilename().IsEmpty())
+	{
+		Scene->SaveScene(Scene->GetFilename(), Error);
+	}
+	OnExitRequested.ExecuteIfBound();
+	return false;
 }
 
 void SRenderStudioMainFrame::OnAbout()

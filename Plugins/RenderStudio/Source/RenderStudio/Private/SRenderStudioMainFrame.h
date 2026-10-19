@@ -110,6 +110,8 @@ private:
 	void OnEditMaterial();
 	void OnAssignMaterial();
 	void OnShowControls();
+	void OnRunSelfTest();
+	bool OnSelfTestTick(float DeltaTime);
 	void OnAbout();
 	bool HasSelectedObject() const;
 	bool HasSelectedMaterial() const;

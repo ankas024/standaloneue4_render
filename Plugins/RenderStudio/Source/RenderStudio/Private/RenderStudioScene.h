@@ -112,7 +112,6 @@ private:
 	bool IsComponentSelected(const UPrimitiveComponent* Component) const;
 	void RefreshSelectionOutline(AActor* Actor) const;
 	FString MakeUniqueLabel(const FString& BaseLabel) const;
-	FString MakeUniqueAssetName(const FString& BaseName) const;
 	FVector GetDropLocation() const;
 
 	TSharedPtr<FAdvancedPreviewScene> PreviewScene;

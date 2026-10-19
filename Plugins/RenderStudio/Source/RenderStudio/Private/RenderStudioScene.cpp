@@ -538,11 +538,6 @@ void FRenderStudioScene::SetTurntableEnabled(bool bEnabled)
 //////////////////////////////////////////////////////////////////////////
 // Materials
 
-FString FRenderStudioScene::MakeUniqueAssetName(const FString& BaseName) const
-{
-	return BaseName;
-}
-
 UMaterial* FRenderStudioScene::CreateMaterial(const FString& BaseName)
 {
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
@@ -619,7 +614,6 @@ UMaterial* FRenderStudioScene::CreateMaterial(const FString& BaseName)
 
 	// Normal map
 	UMaterialExpressionTextureSampleParameter2D* NormalMap = MakeTexture(TEXT("NormalMap"), TEXT("04 Surface"), FlatNormal, SAMPLERTYPE_Normal, -700, 200);
-	UMaterialEditingLibrary::ConnectMaterialExpressions(NormalMap, TEXT("RGB"), nullptr, TEXT(""));
 	UMaterialEditingLibrary::ConnectMaterialProperty(NormalMap, TEXT("RGB"), MP_Normal);
 
 	// Emission

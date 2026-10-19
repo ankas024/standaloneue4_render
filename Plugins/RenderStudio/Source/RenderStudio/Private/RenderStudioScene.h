@@ -13,6 +13,7 @@ class URenderStudioSettings;
 class UStaticMesh;
 class UWorld;
 struct FPreviewSceneProfile;
+struct FSlateBrush;
 
 enum class ERenderStudioPrimitive : uint8
 {

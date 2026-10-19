@@ -75,7 +75,8 @@ FRenderStudioScene::FRenderStudioScene()
 	: Settings(GetMutableDefault<URenderStudioSettings>())
 	, DefaultMaterial(nullptr)
 {
-	PreviewScene = MakeShareable(new FAdvancedPreviewScene(FPreviewScene::ConstructionValues()));
+	// Floor sits a hair below z=0 so the reference grid does not z-fight with it
+	PreviewScene = MakeShareable(new FAdvancedPreviewScene(FPreviewScene::ConstructionValues(), 0.2f));
 	DefaultMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 }
 

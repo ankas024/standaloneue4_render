@@ -28,7 +28,7 @@
 
 namespace RenderStudioMaterialPanel
 {
-	static const float ThumbnailSize = 44.0f;
+	static const int32 ThumbnailSize = 44;
 	static const float LabelWidth = 110.0f;
 
 	static FString MakeDisplayName(const FMaterialParameterInfo& Info)
@@ -69,11 +69,11 @@ void SRenderStudioMaterialPanel::Construct(const FArguments& InArgs, const TShar
 				return FReply::Handled();
 			}),
 			nullptr,
-			TAttribute<bool>::Create([WeakCommands, Command]()
+			TAttribute<bool>::Create(TAttribute<bool>::FGetter::CreateLambda([WeakCommands, Command]()
 			{
 				TSharedPtr<FUICommandList> PinnedCommands = WeakCommands.Pin();
 				return PinnedCommands.IsValid() && PinnedCommands->CanExecuteAction(Command.ToSharedRef());
-			}));
+			})));
 	};
 
 	ChildSlot

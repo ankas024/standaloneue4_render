@@ -223,7 +223,7 @@ TSharedPtr<SWidget> SRenderStudioOutliner::OnContextMenuOpening()
 
 	MenuBuilder.BeginSection("Add", LOCTEXT("AddSection", "Add"));
 	MenuBuilder.AddSubMenu(LOCTEXT("AddSubMenu", "Add"), LOCTEXT("AddSubMenuTooltip", "Add a primitive or light"),
-		FNewMenuDelegate::CreateLambda([this](FMenuBuilder& SubMenu)
+		FNewMenuDelegate::CreateLambda([](FMenuBuilder& SubMenu)
 		{
 			const FRenderStudioCommands& SubCommands = FRenderStudioCommands::Get();
 			SubMenu.AddMenuEntry(SubCommands.AddCube);

@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "4.27",
+	"Category": "",
+	"Description": "Render Studio - standalone look-dev / rendering app built on Unreal Engine 4.27",
+	"Modules": [
+		{
+			"Name": "RenderStudioGame",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "RenderStudio",
+			"Enabled": true
+		}
+	]
+}

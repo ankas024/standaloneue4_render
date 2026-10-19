@@ -86,7 +86,7 @@ SRenderStudioMainFrame::~SRenderStudioMainFrame()
 
 	if (TabManager.IsValid())
 	{
-		FLayoutSaveRestore::SaveToConfig(GEditorLayoutIni, TabManager->PersistLayout());
+		TabManager->SavePersistentLayout();
 		TabManager->CloseAllAreas();
 		TabManager->UnregisterAllTabSpawners();
 	}
@@ -531,9 +531,10 @@ TSharedRef<SWidget> SRenderStudioMainFrame::MakeStatusBar()
 FText SRenderStudioMainFrame::GetSceneInfoText() const
 {
 	const FString RHIName = GDynamicRHI ? FString(GDynamicRHI->GetName()) : FString(TEXT("RHI"));
-	return FText::Format(LOCTEXT("SceneInfo", "Objects: {0}    Materials: {1}    Unreal Engine 4.27 / {2}"),
+	AActor* Selected = Scene->GetSelectedObject();
+	return FText::Format(LOCTEXT("SceneInfo", "Objects: {0}    Selected: {1}    Unreal Engine 4.27 / {2}"),
 		FText::AsNumber(Scene->GetObjects().Num()),
-		FText::AsNumber(Scene->GetMaterials().Num()),
+		Selected ? FText::FromString(Scene->GetObjectLabel(Selected)) : LOCTEXT("SelectedNone", "-"),
 		FText::FromString(RHIName));
 }
 

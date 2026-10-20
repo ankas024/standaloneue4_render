@@ -5,6 +5,8 @@
 Output (committed, re-run only to change the look):
   Build/Windows/Application.ico   icon of RenderStudio.exe (picked up by UnrealBuildTool)
   Content/Splash/EdSplash.bmp     startup splash screen (replaces the Unreal Editor splash)
+  RenderStudio.png                project thumbnail (the editor captures one from a viewport on exit
+                                  when it is missing, which fails with the level editor hidden)
 
 Standard library only.
 """
@@ -130,7 +132,8 @@ def splash(w=600, h=220):
 def main():
     write_ico(os.path.join(ROOT, "Build", "Windows", "Application.ico"), [16, 24, 32, 48, 64, 256])
     write_bmp(os.path.join(ROOT, "Content", "Splash", "EdSplash.bmp"), 600, 220, splash())
-    print("Wrote Build/Windows/Application.ico and Content/Splash/EdSplash.bmp")
+    write_png(os.path.join(ROOT, "RenderStudio.png"), 192, 192, app_icon(192))
+    print("Wrote Build/Windows/Application.ico, Content/Splash/EdSplash.bmp and RenderStudio.png")
 
 
 if __name__ == "__main__":

@@ -121,10 +121,14 @@ namespace RenderStudioSelfTest
 		// Environment and cameras
 		const TArray<UTextureCube*> Skies = Scene.GetEnvironmentMaps();
 		Expect(Skies.Num() > 0, FString::Printf(TEXT("HDRI list (%d found)"), Skies.Num()));
+		UTextureCube* OriginalSky = Scene.GetEnvironmentMap();
 		if (Skies.Num() > 0)
 		{
-			Scene.SetEnvironmentMap(Skies[0]);
-			Expect(Scene.GetEnvironmentMap() == Skies[0], TEXT("switch the sky HDRI"));
+			UTextureCube* OtherSky = Skies[0] != OriginalSky ? Skies[0] : Skies.Last();
+			Scene.SetEnvironmentMap(OtherSky);
+			Expect(Scene.GetEnvironmentMap() == OtherSky, TEXT("switch the sky HDRI"));
+			// Put the user's sky back (the profile is shared with the rest of the application)
+			Scene.SetEnvironmentMap(OriginalSky);
 		}
 
 		Viewport.SetStandardView(ERenderStudioView::Front);

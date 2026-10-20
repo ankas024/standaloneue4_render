@@ -33,7 +33,8 @@ namespace RenderStudioViewportClient
 		{
 			Bounds = FBox(FVector(-100.0f, -100.0f, 0.0f), FVector(100.0f, 100.0f, 150.0f));
 		}
-		return Bounds;
+		// Leave some air around the subject, like a product shot
+		return Bounds.ExpandBy(Bounds.GetExtent().GetMax() * 0.6f);
 	}
 
 	/** Box filter in linear space, so supersampled edges keep their brightness. */
@@ -355,34 +356,18 @@ FString FRenderStudioViewportClient::SaveScreenshot(const FString& InFilename)
 		Filename += TEXT(".png");
 	}
 
+	// Rendered off screen from the viewport camera at viewport size (times the screenshot
+	// multiplier): no grid, gizmo or selection outline, and no dependency on reading back the
+	// window's back buffer.
 	const int32 Multiplier = FMath::Clamp(GetDefault<URenderStudioSettings>()->ScreenshotResolutionMultiplier, 1, 4);
-	if (Multiplier > 1)
-	{
-		// Supersampled: render the viewport's camera off screen at N x and filter down
-		FRenderStudioRenderSettings Settings;
-		Settings.Width = Viewport->GetSizeXY().X;
-		Settings.Height = Viewport->GetSizeXY().Y;
-		Settings.Supersampling = Multiplier;
-		Settings.Samples = 8;
-
-		TArray<FColor> SupersampledPixels;
-		return RenderImage(Settings, SupersampledPixels) && SaveImage(Filename, SupersampledPixels, Settings.Width, Settings.Height) ? Filename : FString();
-	}
-
-	// Make sure the latest frame (with the gizmo hidden) is what we read back.
-	const bool bWasShowingWidget = bShowWidget;
-	ShowWidget(false);
-	Viewport->Draw();
-	ShowWidget(bWasShowingWidget);
+	FRenderStudioRenderSettings Settings;
+	Settings.Width = Viewport->GetSizeXY().X * Multiplier;
+	Settings.Height = Viewport->GetSizeXY().Y * Multiplier;
+	Settings.Supersampling = 1;
+	Settings.Samples = 8;
 
 	TArray<FColor> Pixels;
-	const FIntPoint Size = Viewport->GetSizeXY();
-	if (!Viewport->ReadPixels(Pixels) || Pixels.Num() != Size.X * Size.Y)
-	{
-		return FString();
-	}
-
-	return SaveImage(Filename, Pixels, Size.X, Size.Y) ? Filename : FString();
+	return RenderImage(Settings, Pixels) && SaveImage(Filename, Pixels, Settings.Width, Settings.Height) ? Filename : FString();
 }
 
 bool FRenderStudioViewportClient::RenderImage(const FRenderStudioRenderSettings& Settings, TArray<FColor>& OutPixels)

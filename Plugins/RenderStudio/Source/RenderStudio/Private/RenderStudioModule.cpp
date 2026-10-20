@@ -6,7 +6,12 @@
 #include "Framework/Docking/TabManager.h"
 #include "Interfaces/IMainFrameModule.h"
 #include "CoreGlobals.h"
+#include "HAL/FileManager.h"
+#include "Interfaces/IPluginManager.h"
+#include "Misc/App.h"
 #include "Misc/CommandLine.h"
+#include "Misc/CoreDelegates.h"
+#include "Misc/Paths.h"
 #include "Misc/Parse.h"
 #include "Modules/ModuleManager.h"
 #include "RenderStudioCommands.h"
@@ -54,10 +59,13 @@ void FRenderStudioModule::StartupModule()
 		MainFrame.EnableDelayedShowMainFrame();
 		MainFrameCreatedHandle = MainFrame.OnMainFrameCreationFinished().AddRaw(this, &FRenderStudioModule::OnMainFrameCreated);
 	}
+	EnginePreExitHandle = FCoreDelegates::OnEnginePreExit.AddRaw(this, &FRenderStudioModule::ReleaseAppWindow);
 }
 
 void FRenderStudioModule::ShutdownModule()
 {
+	FCoreDelegates::OnEnginePreExit.Remove(EnginePreExitHandle);
+
 	if (FModuleManager::Get().IsModuleLoaded("MainFrame"))
 	{
 		FModuleManager::GetModuleChecked<IMainFrameModule>("MainFrame").OnMainFrameCreationFinished().Remove(MainFrameCreatedHandle);
@@ -181,6 +189,18 @@ TSharedRef<SDockTab> FRenderStudioModule::SpawnAppTab(const FSpawnTabArgs& Args)
 
 void FRenderStudioModule::RequestQuit()
 {
+	// On exit the editor captures a project thumbnail from its active viewport if <Project>.png is
+	// missing. That viewport belongs to the hidden level editor and has never drawn, so provide the
+	// thumbnail up front.
+	const FString Thumbnail = FPaths::Combine(FPaths::ProjectDir(), FString(FApp::GetProjectName()) + TEXT(".png"));
+	if (!FPaths::FileExists(Thumbnail))
+	{
+		if (TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("RenderStudio")))
+		{
+			IFileManager::Get().Copy(*Thumbnail, *(Plugin->GetBaseDir() / TEXT("Resources") / TEXT("Icon128.png")));
+		}
+	}
+
 	// Unsaved work has been dealt with by the caller. Close through the main frame, like its own
 	// close button does: that runs the editor's shutdown (layouts and settings are saved) and
 	// requests engine exit.
@@ -193,14 +213,21 @@ void FRenderStudioModule::RequestQuit()
 		RequestEngineExit(TEXT("Render Studio closed"));
 	}
 
-	// Release the window (preview world, viewport, thumbnails) while Slate and the renderer are
-	// still running, rather than at module shutdown.
-	if (IsEngineExitRequested() && AppWindow.IsValid())
+}
+
+void FRenderStudioModule::ReleaseAppWindow()
+{
+	// The window owns the preview world, the viewport and the thumbnails. They must go while Slate,
+	// the renderer and the editor mode system are still running; at module shutdown it is too late.
+	if (AppWindow.IsValid())
 	{
 		TSharedRef<SWindow> Window = AppWindow.ToSharedRef();
 		AppMainFrame.Reset();
 		AppWindow.Reset();
-		FSlateApplication::Get().RequestDestroyWindow(Window);
+		if (FSlateApplication::IsInitialized())
+		{
+			FSlateApplication::Get().DestroyWindowImmediately(Window);
+		}
 	}
 }
 

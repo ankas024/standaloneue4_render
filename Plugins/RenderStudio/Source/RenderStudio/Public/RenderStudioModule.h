@@ -35,8 +35,10 @@ private:
 	void OnAppWindowCloseRequested(const TSharedRef<SWindow>& Window);
 	void OnExitRequested();
 	void RequestQuit();
+	void ReleaseAppWindow();
 
 	FDelegateHandle MainFrameCreatedHandle;
+	FDelegateHandle EnginePreExitHandle;
 	TSharedPtr<SWindow> AppWindow;
 	TSharedPtr<SRenderStudioMainFrame> AppMainFrame;
 };

@@ -231,6 +231,8 @@ def package(engine_root, output_root, platform, configuration, symbols):
     # Project
     log("Project files")
     shutil.copy2(os.path.join(PROJECT_ROOT, PROJECT_NAME + ".uproject"), out_project)
+    # Project thumbnail: without it the editor tries to capture one from a (hidden) viewport on exit
+    shutil.copy2(os.path.join(PROJECT_ROOT, PROJECT_NAME + ".png"), out_project)
     copy_tree(os.path.join(PROJECT_ROOT, "Config"), os.path.join(out_project, "Config"), platform)
     copy_tree(os.path.join(PROJECT_ROOT, "Content"), os.path.join(out_project, "Content"), platform)
     plugin_src = os.path.join(PROJECT_ROOT, "Plugins", "RenderStudio")

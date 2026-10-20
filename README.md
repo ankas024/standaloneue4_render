@@ -5,11 +5,12 @@ renderer and the UE4 node-based material editor, inside a simple early-2010s des
 UI. It follows Marmoset Toolbag's workflow (drop in a mesh, light it with an HDRI, tweak
 materials, render a beauty shot or a turntable), but has **no baking features**.
 
-> **Status (v0.2):** all of the application's C++ compiles against the UE 4.27 engine headers
-> with Epic's clang 11 Linux toolchain, through UnrealBuildTool and UnrealHeaderTool, with zero
-> errors and zero warnings. Both build targets have been checked. The application has **not
-> been run yet**: that needs a full engine build and a GPU. Report anything that misbehaves on
-> first launch.
+> **Status (v0.2):** built from UE 4.27 source and **run** on Linux with Mesa's software Vulkan
+> driver (no GPU). It runs as the standalone application: own window, level editor hidden. The
+> built-in self test passes all 30 checks, and the application exits cleanly. The self test
+> covers objects, undo/redo, presets, HDRIs, camera bookmarks, scene save/load, final renders, a
+> turntable and screenshots. The standalone `RenderStudio` target compiles. A full Windows build
+> and package (`Package.bat`) has not been done yet.
 
 ```
 +------------------------------------------------------------------------------------+
@@ -151,6 +152,14 @@ Or open the project in the editor and use *Window → Render Studio*.
 Drag materials from the Materials panel onto objects. Drop `.fbx` / `.obj` / `.hdr` files on
 the viewport.
 
+## Self test
+
+*Help → Run Self Test* (or `RenderStudio.exe -RenderStudioSelfTest`, which quits when done)
+exercises the application end to end on the current machine. It covers adding objects,
+undo/redo, labels and visibility, material presets, HDRIs, camera bookmarks, a scene save /
+load round trip, a supersampled final render (PNG and JPEG), a short turntable and a
+screenshot. The report and images are written to `Saved/SelfTest`. It replaces the open scene.
+
 ## Changing the look
 
 Panel bitmaps and colours: edit `Scripts/generate_style_images.py` and the colours in
@@ -159,7 +168,8 @@ script, then rebuild.
 
 ## Known limitations
 
-* Not run yet. Compile-checked only (see Status above).
+* Tested on Linux with software rendering only. The Windows build (`Package.bat`) has not been
+  run yet. Use *Help → Run Self Test* on a new machine to check everything works.
 * Undo covers the scene, not material parameter edits. Modified materials are saved together
   with the scene. When quitting, *Don't Save* discards them.
 * Turntables are image sequences. Combine them into a video with any editor or `ffmpeg`.
